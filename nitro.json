@@ -1,0 +1,17 @@
+{
+  "cxxNamespace": ["nitroclouduploader"],
+  "ios": {
+    "iosModuleName": "NitroCloudUploader"
+  },
+  "android": {
+    "androidNamespace": ["nitroclouduploader"],
+    "androidCxxLibName": "nitroclouduploader"
+  },
+  "autolinking": {
+    "NitroCloudUploader": {
+      "swift": "NitroCloudUploader",
+      "kotlin": "NitroCloudUploader"
+    }
+  },
+  "ignorePaths": ["node_modules"]
+}
