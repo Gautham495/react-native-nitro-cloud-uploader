@@ -45,9 +45,7 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
   </tr>
   <tr>
     <td align="center">
-<video height="650" width="300" controls>
-  <source src="https://github.com/user-attachments/assets/f6c23e68-5e3f-4538-9c78-877208847bfc" type="video/mp4" />
-</video>
+    <img src="./docs/videos/iOS.gif" width="300" alt="Demo GIF" />
     </td>
   </tr>
 </table>
