@@ -24,3 +24,4 @@
 
 # Keep service class
 -keep class com.margelo.nitro.nitroclouduploader.UploadForegroundService { *; }
+

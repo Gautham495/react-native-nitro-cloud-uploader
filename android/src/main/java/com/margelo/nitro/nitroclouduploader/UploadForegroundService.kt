@@ -222,3 +222,4 @@ class UploadForegroundService : Service() {
         isServiceStarted = false
     }
 }
+

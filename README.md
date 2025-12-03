@@ -31,6 +31,13 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 
 > [!IMPORTANT]
 >
+> - **iOS**: Fully tested and production-ready ✅
+> - **Android**: Implementation complete with full feature parity ✅
+>   - Background uploads via ForegroundService
+>   - Progress notifications
+>   - Network drop/restore handling
+>   - Pause/Resume/Cancel controls
+>   - Requires Android 7.0+ (API 24+)
 > - Tested only for React Native 0.81.0 and above. PRs welcome for lower RN versions to make it work and stable for lower versions.
 
 ---
@@ -74,42 +81,21 @@ const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
 
 ## 🧠 Overview
 
-| Feature                          | Support        |
-| -------------------------------- | -------------- |
-| Large file uploads (audio/video) | ✅             |
-| S3-compatible storage            | ✅             |
-| Background upload (iOS)          | ✅             |
-| Progress tracking                | ✅             |
-| Kotlin Android support           | 🚧 PRs welcome |
-
-## 🌍 S3-Compatible Provider Support
-
-This library relies on true S3-style multipart uploads:
-
-- 5MB+ chunked uploads
-- Presigned `PUT` URLs
-- `UploadId` + `partNumber`
-- `ETag` collection
-- `CompleteMultipartUpload`
-
-Because of this, only providers with **full S3 API compatibility** work reliably.
-
-| Provider               | Works? | Reason                                                   |
-| ---------------------- | ------ | -------------------------------------------------------- |
-| AWS S3                 | ✅     | Native S3 API with complete multipart support.           |
-| Cloudflare R2          | ✅     | Fully S3-compatible including multipart uploads + ETags. |
-| Backblaze B2           | ✅     | Implements S3 API including multipart operations.        |
-| Wasabi                 | ✅     | 100% S3-compatible; no changes needed.                   |
-| DigitalOcean Spaces    | ⚠️     | Mostly compatible; some multipart quirks.                |
-| Linode/Akamai          | ✅     | Full S3 API implementation.                              |
-| Vultr                  | ⚠️     | Partial multipart edge-case issues.                      |
-| MinIO                  | ✅     | Perfect for dev/self-hosted setups.                      |
-| Oracle/Alibaba/Tencent | ⚠️     | S3 mode works but not fully tested.                      |
-| Google Cloud Storage   | ❌     | Not S3-compatible; different API.                        |
-| Azure Blob             | ❌     | Uses BlockBlob API; no multipart S3 support.             |
-| Firebase Storage       | ❌     | Built on GCS; no S3 API.                                 |
-| Supabase Storage       | ❌     | Not S3; exposes plain HTTP upload endpoints.             |
-| Cloudinary             | ❌     | Proprietary API; no multipart presigned URLs.            |
+| Feature                           | iOS | Android | Implementation |
+| --------------------------------- | --- | ------- | -------------- |
+| Large file uploads (audio/video)  | ✅  | ✅      | Native        |
+| Multipart / presigned URL uploads | ✅  | ✅      | S3-compatible |
+| Cloudflare R2                     | ✅  | ✅      | Tested        |
+| Backblaze B2                      | ✅  | ✅      | Tested        |
+| S3-compatible storage             | ✅  | ✅      | Standard API  |
+| Background uploads                | ✅  | ✅      | URLSession.background / ForegroundService |
+| Pause/Resume                      | ✅  | ✅      | Task suspension |
+| Cancel                            | ✅  | ✅      | Job cancellation |
+| Network monitoring                | ✅  | ✅      | Auto-pause/resume on connection loss |
+| Progress tracking                 | ✅  | ✅      | Real-time events |
+| Progress notifications            | ✅  | ✅      | Native notifications |
+| Parallel chunk uploads            | ✅  | ✅      | Configurable (default: 3) |
+| ETag collection                   | ✅  | ✅      | Automatic     |
 
 ---
 
@@ -135,12 +121,54 @@ await CloudUploader.startUpload(newUploadId, filePath, uploadUrls, 3, true);
 
 ## 🧩 Supported Platforms
 
-| Platform          | Status                         |
-| ----------------- | ------------------------------ |
-| **iOS**           | ✅ Fully Supported             |
-| **Android**       | 🚧 Does not work (PRs welcome) |
-| **iOS Simulator** | ✅ Works                       |
-| **AOSP Emulator** | 🚧 Does not work (PRs welcome) |
+| Platform          | Status             |
+| ----------------- | ------------------ |
+| **iOS**           | ✅ Fully Supported |
+| **Android**       | ✅ Fully Supported |
+| **iOS Simulator** | ✅ Works           |
+| **Android Emulator** | ✅ Works        |
+
+### Android Requirements
+
+**Minimum SDK**: API 24 (Android 7.0)
+
+**Required Permissions** (automatically added):
+- `INTERNET` - Network uploads
+- `ACCESS_NETWORK_STATE` - Network monitoring
+- `POST_NOTIFICATIONS` - Progress notifications (Android 13+)
+- `FOREGROUND_SERVICE` - Background uploads
+- `FOREGROUND_SERVICE_DATA_SYNC` - Data sync service type
+- `WAKE_LOCK` - Keep CPU awake during uploads
+
+**Runtime Permission for Android 13+**:
+
+For devices running Android 13+ (API 33+), you must request the `POST_NOTIFICATIONS` permission at runtime to show upload progress notifications:
+
+```tsx
+import { PermissionsAndroid, Platform } from 'react-native';
+
+// Request notification permission before starting uploads
+if (Platform.OS === 'android' && Platform.Version >= 33) {
+  const granted = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+  );
+  
+  if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+    console.log('Notification permission granted');
+  } else {
+    console.log('Notification permission denied - uploads will work without notifications');
+  }
+}
+```
+
+> **Note**: The library will gracefully skip notifications if permission is denied. Uploads will continue to work normally.
+
+---
+
+## 📚 Documentation
+
+- [Android Implementation Summary](ANDROID_IMPLEMENTATION_SUMMARY.md) - Detailed Android implementation details and architecture
+- [Android Testing Guide](ANDROID_TESTING.md) - Comprehensive testing scenarios for Android
 
 ---
 
