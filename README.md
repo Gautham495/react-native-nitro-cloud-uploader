@@ -4,7 +4,7 @@
   </picture>
 </a>
 
-# react-native-nitro-cloud-uploader (Beta)
+# react-native-nitro-cloud-uploader
 
 **React Native Nitro Module** for **reliable, resumable, background-friendly uploads** of large files (audio, video, images, PDFs) to **S3-compatible storage** — built for real production workloads.
 
@@ -38,6 +38,7 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 >   - Network drop/restore handling
 >   - Pause/Resume/Cancel controls
 >   - Requires Android 7.0+ (API 24+)
+> - Tested only for React Native 0.81.0 and above. PRs welcome for lower RN versions to make it work and stable for lower versions.
 
 ---
 
@@ -46,10 +47,14 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 <table>
   <tr>
     <th align="center">🍏 iOS Demo</th>
+    <th align="center">🤖 Android Demo</th>
   </tr>
   <tr>
     <td align="center">
-  <video height="650" width="300" src="https://github.com/user-attachments/assets/f6c23e68-5e3f-4538-9c78-877208847bfc" controls> </video>
+    <img src="./docs/videos/iOS.gif" width="300" alt="Demo GIF" />
+    </td>
+     <td align="center">
+    <img src="./docs/videos/Android.gif" width="300" alt="Demo GIF" />
     </td>
   </tr>
 </table>
@@ -64,10 +69,12 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 > Demo showcases uploading to cloudflare R2 Bucket
 
 ```tsx
-const BASE_URL = 'https://api.uploader.com/file-uploader';
+const BASE_URL = 'https://your-api.workers.dev';
 const CREATE_UPLOAD_URL = `${BASE_URL}/create-and-start-upload`;
 const COMPLETE_UPLOAD_URL = `${BASE_URL}/complete-upload`;
 const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
+const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
+const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
 ```
 
 ---
@@ -103,7 +110,7 @@ const createResponse = await fetch(CREATE_UPLOAD_URL, {
   body: JSON.stringify({
     uploadId: newUploadId,
     fileSize,
-    chunkSize: 6 * 1024 * 1024, // 6MB chunks
+    chunkSize: 6 * 1024 * 1024, // 6MB chunks for safe chunk uploads
   }),
 });
 

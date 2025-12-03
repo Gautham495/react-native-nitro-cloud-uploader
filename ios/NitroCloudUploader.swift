@@ -381,8 +381,8 @@ class UploadSession: NSObject {
         case idle, uploading, paused, completed, failed, cancelled
     }
     
-    // S3 multipart upload minimum chunk size requirement (5 MB)
-    private static let minimumChunkSize: Int64 = 5 * 1024 * 1024 // 5 MB
+    // S3 multipart upload minimum chunk size requirement (5 MB) -6MB to be safe
+    private static let minimumChunkSize: Int64 = 6 * 1024 * 1024 //6 MB
     
     let uploadId: String
     let uploadUrls: [String]

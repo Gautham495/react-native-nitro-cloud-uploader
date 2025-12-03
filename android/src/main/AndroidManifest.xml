@@ -2,17 +2,17 @@
 
     <!-- Required for network uploads -->
     <uses-permission android:name="android.permission.INTERNET" />
-    
+
     <!-- Required for network monitoring (auto-pause on network loss) -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    
+
     <!-- Required for upload progress notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    
+
     <!-- Required for background uploads -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    
+
     <!-- Keep CPU awake during uploads -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
