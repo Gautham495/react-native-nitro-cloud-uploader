@@ -4,12 +4,18 @@ import com.facebook.proguard.annotations.DoNotStrip
 import androidx.annotation.Keep
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import androidx.core.content.ContextCompat
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.margelo.nitro.core.Promise
 import okhttp3.*
@@ -42,25 +48,138 @@ class NitroCloudUploader(
         private const val MAX_RETRIES = 3
     }
     
-    // ✅ Declare as lateinit - initialize in init block
-    private lateinit var activeUploads: ConcurrentHashMap<String, UploadJob>
-    private lateinit var uploadStates: ConcurrentHashMap<String, UploadStateData>
-    private lateinit var eventListeners: ConcurrentHashMap<String, MutableList<(UploadProgressEvent) -> Unit>>
+    // ✅ Nullable with lazy initialization (Nitro JNI bridge bypasses normal initialization)
+    private var _activeUploads: ConcurrentHashMap<String, UploadJob>? = null
+    private var _uploadStates: ConcurrentHashMap<String, UploadStateData>? = null
+    private var _eventListeners: ConcurrentHashMap<String, MutableList<(UploadProgressEvent) -> Unit>>? = null
+    
+    // Thread-safe lazy getters
+    private val activeUploads: ConcurrentHashMap<String, UploadJob>
+        get() {
+            if (_activeUploads == null) {
+                synchronized(this) {
+                    if (_activeUploads == null) {
+                        _activeUploads = ConcurrentHashMap()
+                    }
+                }
+            }
+            return _activeUploads!!
+        }
+    
+    private val uploadStates: ConcurrentHashMap<String, UploadStateData>
+        get() {
+            if (_uploadStates == null) {
+                synchronized(this) {
+                    if (_uploadStates == null) {
+                        _uploadStates = ConcurrentHashMap()
+                    }
+                }
+            }
+            return _uploadStates!!
+        }
+    
+    private val eventListeners: ConcurrentHashMap<String, MutableList<(UploadProgressEvent) -> Unit>>
+        get() {
+            if (_eventListeners == null) {
+                synchronized(this) {
+                    if (_eventListeners == null) {
+                        _eventListeners = ConcurrentHashMap()
+                    }
+                }
+            }
+            return _eventListeners!!
+        }
     
     @Volatile
     private var isNetworkAvailable = true
     
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     
-    // ✅ Declare as lateinit - initialize in init block
-    private lateinit var uploadExecutor: java.util.concurrent.ExecutorService
-    private lateinit var uploadScope: CoroutineScope
+    // ✅ Nullable with double-checked locking (by lazy doesn't work with Nitro JNI)
+    @Volatile private var _uploadExecutor: java.util.concurrent.ExecutorService? = null
+    @Volatile private var _uploadScope: CoroutineScope? = null
+    @Volatile private var _notificationManager: NotificationManager? = null
+    @Volatile private var _connectivityManager: ConnectivityManager? = null
+    @Volatile private var _mainHandler: Handler? = null
+    @Volatile private var _httpClient: OkHttpClient? = null
     
-    private lateinit var notificationManager: NotificationManager
-    private lateinit var connectivityManager: ConnectivityManager
+    private val uploadExecutor: java.util.concurrent.ExecutorService
+        get() {
+            if (_uploadExecutor == null) {
+                synchronized(this) {
+                    if (_uploadExecutor == null) {
+                        _uploadExecutor = Executors.newFixedThreadPool(4)
+                    }
+                }
+            }
+            return _uploadExecutor!!
+        }
     
-    // ✅ Declare as lateinit - initialize in init block
-    private lateinit var httpClient: OkHttpClient
+    private val uploadScope: CoroutineScope
+        get() {
+            if (_uploadScope == null) {
+                synchronized(this) {
+                    if (_uploadScope == null) {
+                        _uploadScope = CoroutineScope(uploadExecutor.asCoroutineDispatcher() + SupervisorJob())
+                    }
+                }
+            }
+            return _uploadScope!!
+        }
+    
+    private val notificationManager: NotificationManager
+        get() {
+            if (_notificationManager == null) {
+                synchronized(this) {
+                    if (_notificationManager == null) {
+                        _notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    }
+                }
+            }
+            return _notificationManager!!
+        }
+    
+    private val connectivityManager: ConnectivityManager
+        get() {
+            if (_connectivityManager == null) {
+                synchronized(this) {
+                    if (_connectivityManager == null) {
+                        _connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                    }
+                }
+            }
+            return _connectivityManager!!
+        }
+    
+    private val mainHandler: Handler
+        get() {
+            if (_mainHandler == null) {
+                synchronized(this) {
+                    if (_mainHandler == null) {
+                        _mainHandler = Handler(Looper.getMainLooper())
+                    }
+                }
+            }
+            return _mainHandler!!
+        }
+    
+    private val httpClient: OkHttpClient
+        get() {
+            if (_httpClient == null) {
+                synchronized(this) {
+                    if (_httpClient == null) {
+                        _httpClient = OkHttpClient.Builder()
+                            .connectTimeout(120, TimeUnit.SECONDS)
+                            .writeTimeout(120, TimeUnit.SECONDS)
+                            .readTimeout(120, TimeUnit.SECONDS)
+                            .retryOnConnectionFailure(true)
+                            .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
+                            .build()
+                    }
+                }
+            }
+            return _httpClient!!
+        }
     
     data class UploadJob(
         val uploadId: String,
@@ -83,41 +202,17 @@ class NitroCloudUploader(
     )
 
     init {
-        println("🚀 NitroCloudUploader init started (Coroutines-based)")
+        println("🚀 NitroCloudUploader init started (using lazy initialization)")
         
-        // ✅ Initialize all properties explicitly in init block
+        // ✅ Setup notifications and network monitoring
+        // Note: Properties are now initialized lazily or at declaration
         try {
-            println("   Initializing collections...")
-            activeUploads = ConcurrentHashMap()
-            uploadStates = ConcurrentHashMap()
-            eventListeners = ConcurrentHashMap()
-            
-            println("   Initializing system services...")
-            notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            
-            println("   Initializing executor and scope...")
-            uploadExecutor = Executors.newFixedThreadPool(4)
-            uploadScope = CoroutineScope(uploadExecutor.asCoroutineDispatcher() + SupervisorJob())
-            
-            println("   Initializing HTTP client...")
-            httpClient = OkHttpClient.Builder()
-                .connectTimeout(120, TimeUnit.SECONDS)
-                .writeTimeout(120, TimeUnit.SECONDS)
-                .readTimeout(120, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(true)
-                .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
-                .build()
-            
-            println("   Setting up notifications and network monitoring...")
             setupNotifications()
             setupNetworkMonitoring()
-            
             println("✅ NitroCloudUploader initialized successfully")
         } catch (e: Exception) {
             println("❌ NitroCloudUploader initialization failed: ${e.message}")
             e.printStackTrace()
-            throw e
         }
     }
 
@@ -238,6 +333,19 @@ class NitroCloudUploader(
                 throw IllegalArgumentException("File is empty")
             }
 
+            // ✅ Calculate and validate chunk size (match iOS logic)
+            val calculatedChunkSize = Math.ceil(fileSize.toDouble() / uploadUrls.size).toLong()
+            val chunkSize = Math.max(calculatedChunkSize, MIN_CHUNK_SIZE.toLong())
+            
+            // Validate that file is large enough for the number of chunks requested
+            val requiredMinimumSize = (uploadUrls.size - 1) * MIN_CHUNK_SIZE.toLong()
+            if (fileSize < requiredMinimumSize) {
+                throw IllegalArgumentException(
+                    "File size ($fileSize bytes) is too small for ${uploadUrls.size} chunks. " +
+                    "Minimum required: $requiredMinimumSize bytes (5 MB per chunk except last)"
+                )
+            }
+
             // ✅ Create upload state
             uploadStates[uploadId] = UploadStateData(
                 totalBytes = fileSize,
@@ -260,12 +368,26 @@ class NitroCloudUploader(
                         showNotification(uploadId, 100, "Upload complete!", isComplete = true)
                     }
                     
+                    // ✅ Stop foreground service on success
+                    try {
+                        UploadForegroundService.stopUploadService(appContext)
+                    } catch (e: Exception) {
+                        println("⚠️ Failed to stop foreground service: ${e.message}")
+                    }
+                    
                     promise.resolve(result)
                 } catch (e: Exception) {
                     println("❌ Upload failed: ${e.message}")
                     
                     if (shouldNotify) {
                         showNotification(uploadId, -1, "Upload failed", isComplete = true)
+                    }
+                    
+                    // ✅ Stop foreground service on failure
+                    try {
+                        UploadForegroundService.stopUploadService(appContext)
+                    } catch (serviceError: Exception) {
+                        println("⚠️ Failed to stop foreground service: ${serviceError.message}")
                     }
                     
                     promise.reject(e)
@@ -275,6 +397,13 @@ class NitroCloudUploader(
             }
 
             activeUploads[uploadId] = UploadJob(uploadId, job)
+
+            // ✅ Start foreground service for background upload support
+            try {
+                UploadForegroundService.startUploadService(appContext, uploadId)
+            } catch (e: Exception) {
+                println("⚠️ Failed to start foreground service: ${e.message}")
+            }
 
             emitEvent(
                 UploadProgressEvent(
@@ -314,18 +443,22 @@ class NitroCloudUploader(
         val uploadJob = activeUploads[uploadId] ?: throw IllegalStateException("Upload job not found")
         
         try {
-            // ✅ Create part info
+            // ✅ Calculate chunk size (match iOS logic)
+            val calculatedChunkSize = Math.ceil(fileSize.toDouble() / uploadUrls.size).toLong()
+            val chunkSize = Math.max(calculatedChunkSize, MIN_CHUNK_SIZE.toLong())
+            
+            // ✅ Create part info with proper offset calculation
             val parts = uploadUrls.mapIndexed { index, url ->
                 val partNumber = index + 1
-                val offset = (fileSize * index) / uploadUrls.size
-                val nextOffset = if (index == uploadUrls.size - 1) {
-                    fileSize
+                val offset = index * chunkSize
+                val size = if (index == uploadUrls.size - 1) {
+                    // Last chunk gets remaining bytes
+                    fileSize - offset
                 } else {
-                    (fileSize * (index + 1)) / uploadUrls.size
+                    chunkSize
                 }
-                val chunkSize = nextOffset - offset
                 
-                PartInfo(partNumber, url, offset, chunkSize)
+                PartInfo(partNumber, url, offset, size)
             }
 
             // ✅ Upload parts with limited parallelism
@@ -495,6 +628,18 @@ class NitroCloudUploader(
                 if (showNotification) {
                     val progressPercent = (progress * 100).toInt()
                     showNotification(uploadId, progressPercent, "Uploading... ${progressPercent}%")
+                    
+                    // ✅ Update foreground service notification
+                    try {
+                        UploadForegroundService.updateProgress(
+                            appContext,
+                            uploadId,
+                            progressPercent,
+                            "Uploading... ${progressPercent}%"
+                        )
+                    } catch (e: Exception) {
+                        println("⚠️ Failed to update foreground service: ${e.message}")
+                    }
                 }
 
                 return@withContext true
@@ -642,6 +787,14 @@ class NitroCloudUploader(
             
             cleanup(uploadId)
             cancelNotification()
+            
+            // ✅ Stop foreground service on cancel
+            try {
+                UploadForegroundService.stopUploadService(appContext)
+            } catch (e: Exception) {
+                println("⚠️ Failed to stop foreground service: ${e.message}")
+            }
+            
             promise.resolve(Unit)
         } catch (e: Exception) {
             println("❌ Cancel error: ${e.message}")
@@ -707,29 +860,62 @@ class NitroCloudUploader(
     }
 
     private fun emitEvent(event: UploadProgressEvent) {
-        try {
-            eventListeners[event.type]?.forEach { 
-                try {
-                    it(event)
-                } catch (e: Exception) {
-                    println("⚠️ Event callback error: ${e.message}")
+        // ⚠️ Emit on main thread to ensure React Native bridge compatibility (matches iOS behavior)
+        mainHandler.post {
+            try {
+                eventListeners[event.type]?.forEach { 
+                    try {
+                        it(event)
+                    } catch (e: Exception) {
+                        println("⚠️ Event callback error: ${e.message}")
+                    }
                 }
-            }
-            
-            eventListeners["all"]?.forEach { 
-                try {
-                    it(event)
-                } catch (e: Exception) {
-                    println("⚠️ Event callback error: ${e.message}")
+                
+                eventListeners["all"]?.forEach { 
+                    try {
+                        it(event)
+                    } catch (e: Exception) {
+                        println("⚠️ Event callback error: ${e.message}")
+                    }
                 }
+            } catch (e: Exception) {
+                println("⚠️ Emit event error: ${e.message}")
             }
-        } catch (e: Exception) {
-            println("⚠️ Emit event error: ${e.message}")
         }
     }
 
     private fun showNotification(uploadId: String, progress: Int, message: String, isComplete: Boolean = false) {
         try {
+            // ✅ Check notification permission for Android 13+ (API 33+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val hasPermission = ContextCompat.checkSelfPermission(
+                    appContext,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+                
+                if (!hasPermission) {
+                    println("⚠️ POST_NOTIFICATIONS permission not granted. Notifications will not be shown.")
+                    println("   Add permission request in your app: <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\" />")
+                    return
+                }
+            }
+            
+            // ✅ Create intent to open app when notification is tapped
+            val launchIntent = appContext.packageManager.getLaunchIntentForPackage(appContext.packageName)?.apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            
+            val pendingIntent = if (launchIntent != null) {
+                PendingIntent.getActivity(
+                    appContext,
+                    0,
+                    launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            } else {
+                null
+            }
+            
             val notification = NotificationCompat.Builder(appContext, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("Uploading File")
                 .setContentText(message)
@@ -737,6 +923,7 @@ class NitroCloudUploader(
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(!isComplete)
                 .setAutoCancel(isComplete)
+                .setContentIntent(pendingIntent)
                 .apply {
                     if (progress in 0..100) {
                         setProgress(100, progress, false)
@@ -768,21 +955,21 @@ class NitroCloudUploader(
         
         networkCallback?.let { 
             try {
-                connectivityManager.unregisterNetworkCallback(it)
+                _connectivityManager?.unregisterNetworkCallback(it)
             } catch (e: Exception) {
                 println("⚠️ Unregister network callback error: ${e.message}")
             }
         }
         
         // Cancel all active uploads
-        activeUploads.values.forEach { it.job.cancel() }
-        activeUploads.clear()
-        uploadStates.clear()
-        eventListeners.clear()
+        _activeUploads?.values?.forEach { it.job.cancel() }
+        _activeUploads?.clear()
+        _uploadStates?.clear()
+        _eventListeners?.clear()
         
         // Shutdown executor
-        uploadScope.cancel()
-        uploadExecutor.shutdown()
+        _uploadScope?.cancel()
+        _uploadExecutor?.shutdown()
     }
 
     private data class PartInfo(

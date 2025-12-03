@@ -4,7 +4,7 @@
   </picture>
 </a>
 
-# react-native-nitro-cloud-uploader (Beta)
+# react-native-nitro-cloud-uploader
 
 **React Native Nitro Module** for **reliable, resumable, background-friendly uploads** of large files (audio, video, images, PDFs) to **S3-compatible storage** — built for real production workloads.
 
@@ -31,9 +31,7 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 
 > [!IMPORTANT]
 >
-> - All of my users are on **iOS in the US**, so iOS support is complete.
-> - Android support is **not fully implemented yet andd does not work and should not used for now!**.
-> - PRs for Kotlin / Android support are absolutely welcome!
+> - Tested only for React Native 0.81.0 and above. PRs welcome for lower RN versions to make it work and stable for lower versions.
 
 ---
 
@@ -42,10 +40,14 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 <table>
   <tr>
     <th align="center">🍏 iOS Demo</th>
+    <th align="center">🤖 Android Demo</th>
   </tr>
   <tr>
     <td align="center">
-  <video height="650" width="300" src="https://github.com/user-attachments/assets/f6c23e68-5e3f-4538-9c78-877208847bfc" controls> </video>
+    <img src="./docs/videos/iOS.gif" width="300" alt="Demo GIF" />
+    </td>
+     <td align="center">
+    <img src="./docs/videos/Android.gif" width="300" alt="Demo GIF" />
     </td>
   </tr>
 </table>
@@ -60,26 +62,54 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 > Demo showcases uploading to cloudflare R2 Bucket
 
 ```tsx
-const BASE_URL = 'https://api.uploader.com/file-uploader';
+const BASE_URL = 'https://your-api.workers.dev';
 const CREATE_UPLOAD_URL = `${BASE_URL}/create-and-start-upload`;
 const COMPLETE_UPLOAD_URL = `${BASE_URL}/complete-upload`;
 const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
+const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
+const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
 ```
 
 ---
 
 ## 🧠 Overview
 
-| Feature                           | Support        |
-| --------------------------------- | -------------- |
-| Large file uploads (audio/video)  | ✅             |
-| Multipart / presigned URL uploads | ✅             |
-| Cloudflare R2                     | ✅             |
-| Backblaze B2                      | ✅             |
-| S3-compatible storage             | ✅             |
-| Background upload (iOS)           | ✅             |
-| Progress tracking                 | ✅             |
-| Kotlin Android support            | 🚧 PRs welcome |
+| Feature                          | Support        |
+| -------------------------------- | -------------- |
+| Large file uploads (audio/video) | ✅             |
+| S3-compatible storage            | ✅             |
+| Background upload (iOS)          | ✅             |
+| Progress tracking                | ✅             |
+| Kotlin Android support           | 🚧 PRs welcome |
+
+## 🌍 S3-Compatible Provider Support
+
+This library relies on true S3-style multipart uploads:
+
+- 5MB+ chunked uploads
+- Presigned `PUT` URLs
+- `UploadId` + `partNumber`
+- `ETag` collection
+- `CompleteMultipartUpload`
+
+Because of this, only providers with **full S3 API compatibility** work reliably.
+
+| Provider               | Works? | Reason                                                   |
+| ---------------------- | ------ | -------------------------------------------------------- |
+| AWS S3                 | ✅     | Native S3 API with complete multipart support.           |
+| Cloudflare R2          | ✅     | Fully S3-compatible including multipart uploads + ETags. |
+| Backblaze B2           | ✅     | Implements S3 API including multipart operations.        |
+| Wasabi                 | ✅     | 100% S3-compatible; no changes needed.                   |
+| DigitalOcean Spaces    | ⚠️     | Mostly compatible; some multipart quirks.                |
+| Linode/Akamai          | ✅     | Full S3 API implementation.                              |
+| Vultr                  | ⚠️     | Partial multipart edge-case issues.                      |
+| MinIO                  | ✅     | Perfect for dev/self-hosted setups.                      |
+| Oracle/Alibaba/Tencent | ⚠️     | S3 mode works but not fully tested.                      |
+| Google Cloud Storage   | ❌     | Not S3-compatible; different API.                        |
+| Azure Blob             | ❌     | Uses BlockBlob API; no multipart S3 support.             |
+| Firebase Storage       | ❌     | Built on GCS; no S3 API.                                 |
+| Supabase Storage       | ❌     | Not S3; exposes plain HTTP upload endpoints.             |
+| Cloudinary             | ❌     | Proprietary API; no multipart presigned URLs.            |
 
 ---
 
@@ -94,7 +124,7 @@ const createResponse = await fetch(CREATE_UPLOAD_URL, {
   body: JSON.stringify({
     uploadId: newUploadId,
     fileSize,
-    chunkSize: 6 * 1024 * 1024, // 6MB chunks
+    chunkSize: 6 * 1024 * 1024, // 6MB chunks for safe chunk uploads
   }),
 });
 
