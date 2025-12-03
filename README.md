@@ -54,7 +54,7 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
     <img src="./docs/videos/iOS.gif" width="300" alt="Demo GIF" />
     </td>
      <td align="center">
-    <img src="./docs/videos/Android.gif" width="300" alt="Demo GIF" />
+    <img src="./docs/videos/android.gif" width="300" alt="Demo GIF" />
     </td>
   </tr>
 </table>
@@ -81,21 +81,21 @@ const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
 
 ## 🧠 Overview
 
-| Feature                           | iOS | Android | Implementation |
-| --------------------------------- | --- | ------- | -------------- |
-| Large file uploads (audio/video)  | ✅  | ✅      | Native        |
-| Multipart / presigned URL uploads | ✅  | ✅      | S3-compatible |
-| Cloudflare R2                     | ✅  | ✅      | Tested        |
-| Backblaze B2                      | ✅  | ✅      | Tested        |
-| S3-compatible storage             | ✅  | ✅      | Standard API  |
-| Background uploads                | ✅  | ✅      | URLSession.background / ForegroundService |
-| Pause/Resume                      | ✅  | ✅      | Task suspension |
-| Cancel                            | ✅  | ✅      | Job cancellation |
-| Network monitoring                | ✅  | ✅      | Auto-pause/resume on connection loss |
-| Progress tracking                 | ✅  | ✅      | Real-time events |
-| Progress notifications            | ✅  | ✅      | Native notifications |
-| Parallel chunk uploads            | ✅  | ✅      | Configurable (default: 3) |
-| ETag collection                   | ✅  | ✅      | Automatic     |
+| Feature                           | Implementation                            |
+| --------------------------------- | ----------------------------------------- |
+| Large file uploads (audio/video)  | Native                                    |
+| Multipart / presigned URL uploads | S3-compatible                             |
+| Cloudflare R2                     | Tested                                    |
+| Backblaze B2                      | Tested                                    |
+| S3-compatible storage             | Standard API                              |
+| Background uploads                | URLSession.background / ForegroundService |
+| Pause/Resume                      | Task suspension                           |
+| Cancel                            | Job cancellation                          |
+| Network monitoring                | Auto-pause/resume on connection loss      |
+| Progress tracking                 | Real-time events                          |
+| Progress notifications            | Native notifications                      |
+| Parallel chunk uploads            | Configurable (default: 3)                 |
+| ETag collection                   | Automatic                                 |
 
 ---
 
@@ -121,18 +121,19 @@ await CloudUploader.startUpload(newUploadId, filePath, uploadUrls, 3, true);
 
 ## 🧩 Supported Platforms
 
-| Platform          | Status             |
-| ----------------- | ------------------ |
-| **iOS**           | ✅ Fully Supported |
-| **Android**       | ✅ Fully Supported |
-| **iOS Simulator** | ✅ Works           |
-| **Android Emulator** | ✅ Works        |
+| Platform             | Status             |
+| -------------------- | ------------------ |
+| **iOS**              | ✅ Fully Supported |
+| **Android**          | ✅ Fully Supported |
+| **iOS Simulator**    | ✅ Works           |
+| **Android Emulator** | ✅ Works           |
 
 ### Android Requirements
 
 **Minimum SDK**: API 24 (Android 7.0)
 
 **Required Permissions** (automatically added):
+
 - `INTERNET` - Network uploads
 - `ACCESS_NETWORK_STATE` - Network monitoring
 - `POST_NOTIFICATIONS` - Progress notifications (Android 13+)
@@ -152,23 +153,18 @@ if (Platform.OS === 'android' && Platform.Version >= 33) {
   const granted = await PermissionsAndroid.request(
     PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
   );
-  
+
   if (granted === PermissionsAndroid.RESULTS.GRANTED) {
     console.log('Notification permission granted');
   } else {
-    console.log('Notification permission denied - uploads will work without notifications');
+    console.log(
+      'Notification permission denied - uploads will work without notifications'
+    );
   }
 }
 ```
 
 > **Note**: The library will gracefully skip notifications if permission is denied. Uploads will continue to work normally.
-
----
-
-## 📚 Documentation
-
-- [Android Implementation Summary](ANDROID_IMPLEMENTATION_SUMMARY.md) - Detailed Android implementation details and architecture
-- [Android Testing Guide](ANDROID_TESTING.md) - Comprehensive testing scenarios for Android
 
 ---
 
