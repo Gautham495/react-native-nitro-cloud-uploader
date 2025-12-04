@@ -1,6 +1,6 @@
 {
   "name": "react-native-nitro-cloud-uploader",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Mutipart File, Images, Audios upload to AWS S3, Cloudflare R2, Backblaze storage solutions with Nitro Modules",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
