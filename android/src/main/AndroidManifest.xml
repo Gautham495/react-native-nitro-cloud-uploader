@@ -17,6 +17,13 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application>
+        <!-- ContentProvider for automatic context initialization -->
+        <provider
+            android:name="com.margelo.nitro.nitroclouduploader.ContextProvider"
+            android:authorities="${applicationId}.nitroclouduploader.contextprovider"
+            android:exported="false"
+            android:initOrder="100" />
+        
         <!-- Foreground service for background uploads -->
         <service
             android:name="com.margelo.nitro.nitroclouduploader.UploadForegroundService"
