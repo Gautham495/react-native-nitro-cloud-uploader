@@ -170,5 +170,8 @@
       "jest"
     ],
     "version": "0.55.1"
-  }
+  },
+  "contributors": [
+    "Punith Manthri <punithm300@gmail.com>"
+  ]
 }
