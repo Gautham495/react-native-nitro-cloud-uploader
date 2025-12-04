@@ -34,11 +34,12 @@ import java.util.Collections
 
 /**
  * Cloud uploader using Coroutines - No WorkManager dependency
+ * Note: Nitro uses no-arg constructor via JNI, so context must be nullable
  */
 @DoNotStrip
 @Keep
 class NitroCloudUploader(
-    private val appContext: Context
+    private val injectedContext: Context? = null
 ) : HybridNitroCloudUploaderSpec() {
 
     companion object {
@@ -47,6 +48,10 @@ class NitroCloudUploader(
         private const val MIN_CHUNK_SIZE = 5 * 1024 * 1024 // 5MB minimum for S3
         private const val MAX_RETRIES = 3
     }
+    
+    // ✅ Get context from injected param or ContentProvider (auto-initialized on app start)
+    private val appContext: Context?
+        get() = injectedContext ?: ContextProvider.appContext
     
     // ✅ Nullable with lazy initialization (Nitro JNI bridge bypasses normal initialization)
     private var _activeUploads: ConcurrentHashMap<String, UploadJob>? = null
@@ -130,9 +135,12 @@ class NitroCloudUploader(
     private val notificationManager: NotificationManager
         get() {
             if (_notificationManager == null) {
-                synchronized(this) {
-                    if (_notificationManager == null) {
-                        _notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val ctx = appContext  // Cache to avoid smart cast issues
+                if (ctx != null) {
+                    synchronized(this) {
+                        if (_notificationManager == null) {
+                            _notificationManager = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        }
                     }
                 }
             }
@@ -142,9 +150,12 @@ class NitroCloudUploader(
     private val connectivityManager: ConnectivityManager
         get() {
             if (_connectivityManager == null) {
-                synchronized(this) {
-                    if (_connectivityManager == null) {
-                        _connectivityManager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val ctx = appContext  // Cache to avoid smart cast issues
+                if (ctx != null) {
+                    synchronized(this) {
+                        if (_connectivityManager == null) {
+                            _connectivityManager = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                        }
                     }
                 }
             }
@@ -218,6 +229,12 @@ class NitroCloudUploader(
 
     private fun setupNotifications() {
         try {
+            val ctx = appContext  // Cache to avoid smart cast issues
+            if (ctx == null) {
+                println("⚠️ appContext is null, skipping notification setup")
+                return
+            }
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     NOTIFICATION_CHANNEL_ID,
@@ -236,6 +253,12 @@ class NitroCloudUploader(
 
     private fun setupNetworkMonitoring() {
         try {
+            val ctx = appContext  // Cache to avoid smart cast issues
+            if (ctx == null) {
+                println("⚠️ appContext is null, skipping network monitoring setup")
+                return
+            }
+            
             val request = NetworkRequest.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 .build()
@@ -369,13 +392,24 @@ class NitroCloudUploader(
                     }
                     
                     // ✅ Stop foreground service on success
-                    try {
-                        UploadForegroundService.stopUploadService(appContext)
-                    } catch (e: Exception) {
-                        println("⚠️ Failed to stop foreground service: ${e.message}")
+                    val ctx = appContext  // Cache to avoid smart cast issues
+                    if (ctx != null) {
+                        try {
+                            UploadForegroundService.stopUploadService(ctx)
+                        } catch (e: Exception) {
+                            println("⚠️ Failed to stop foreground service: ${e.message}")
+                        }
                     }
                     
                     promise.resolve(result)
+                } catch (e: CancellationException) {
+                    // ✅ Cancellation is intentional, resolve with cancelled result
+                    println("⏸️ Upload cancelled: ${e.message}")
+                    promise.resolve(UploadResult(
+                        uploadId = uploadId,
+                        success = false,
+                        etags = emptyArray()
+                    ))
                 } catch (e: Exception) {
                     println("❌ Upload failed: ${e.message}")
                     
@@ -384,10 +418,13 @@ class NitroCloudUploader(
                     }
                     
                     // ✅ Stop foreground service on failure
-                    try {
-                        UploadForegroundService.stopUploadService(appContext)
-                    } catch (serviceError: Exception) {
-                        println("⚠️ Failed to stop foreground service: ${serviceError.message}")
+                    val ctx = appContext  // Cache to avoid smart cast issues
+                    if (ctx != null) {
+                        try {
+                            UploadForegroundService.stopUploadService(ctx)
+                        } catch (serviceError: Exception) {
+                            println("⚠️ Failed to stop foreground service: ${serviceError.message}")
+                        }
                     }
                     
                     promise.reject(e)
@@ -399,10 +436,13 @@ class NitroCloudUploader(
             activeUploads[uploadId] = UploadJob(uploadId, job)
 
             // ✅ Start foreground service for background upload support
-            try {
-                UploadForegroundService.startUploadService(appContext, uploadId)
-            } catch (e: Exception) {
-                println("⚠️ Failed to start foreground service: ${e.message}")
+            val ctx = appContext  // Cache to avoid smart cast issues
+            if (shouldNotify && ctx != null) {
+                try {
+                    UploadForegroundService.startUploadService(ctx, uploadId)
+                } catch (e: Exception) {
+                    println("⚠️ Failed to start foreground service: ${e.message}")
+                }
             }
 
             emitEvent(
@@ -586,14 +626,19 @@ class NitroCloudUploader(
 
                 if (etag.isEmpty()) {
                     println("⚠️ No ETag received for part ${part.partNumber}")
+                    throw Exception("No ETag in response for part ${part.partNumber}")
                 }
 
-                // ✅ Update state
+                // ✅ Update state - double-check not already counted
                 synchronized(state) {
-                    state.partETags[part.partNumber] = etag
-                    state.completedChunks++
-                    state.bytesUploaded += part.size
-                    state.failedChunks.remove(part.partNumber)
+                    if (!state.partETags.containsKey(part.partNumber)) {
+                        state.partETags[part.partNumber] = etag
+                        state.completedChunks++
+                        state.bytesUploaded += part.size
+                        state.failedChunks.remove(part.partNumber)
+                    } else {
+                        println("⚠️ Part ${part.partNumber} was already marked as completed, skipping state update")
+                    }
                 }
 
                 val progress = state.bytesUploaded.toDouble() / state.totalBytes
@@ -630,15 +675,18 @@ class NitroCloudUploader(
                     showNotification(uploadId, progressPercent, "Uploading... ${progressPercent}%")
                     
                     // ✅ Update foreground service notification
-                    try {
-                        UploadForegroundService.updateProgress(
-                            appContext,
-                            uploadId,
-                            progressPercent,
-                            "Uploading... ${progressPercent}%"
-                        )
-                    } catch (e: Exception) {
-                        println("⚠️ Failed to update foreground service: ${e.message}")
+                    val ctx = appContext  // Cache to avoid smart cast issues
+                    if (ctx != null) {
+                        try {
+                            UploadForegroundService.updateProgress(
+                                ctx,
+                                uploadId,
+                                progressPercent,
+                                "Uploading... ${progressPercent}%"
+                            )
+                        } catch (e: Exception) {
+                            println("⚠️ Failed to update foreground service: ${e.message}")
+                        }
                     }
                 }
 
@@ -769,10 +817,37 @@ class NitroCloudUploader(
             println("🛑 Cancelling upload: $uploadId")
             val uploadJob = activeUploads[uploadId]
             
+            // ✅ Cancel job safely
             if (uploadJob != null) {
-                uploadJob.job.cancel()
+                try {
+                    if (uploadJob.job.isActive) {
+                        uploadJob.job.cancel()  // Don't pass exception, just cancel
+                        println("✅ Upload job cancelled")
+                    } else {
+                        println("⚠️ Upload job is not active, skipping cancellation")
+                    }
+                } catch (e: Exception) {
+                    println("⚠️ Error cancelling job: ${e.message}")
+                }
+            } else {
+                println("⚠️ No active upload found for: $uploadId")
             }
             
+            // ✅ Cleanup before emitting events (prevent accessing disposed resources)
+            cleanup(uploadId)
+            cancelNotification()
+            
+            // ✅ Stop foreground service on cancel
+            val ctx = appContext  // Cache to avoid smart cast issues
+            if (ctx != null) {
+                try {
+                    UploadForegroundService.stopUploadService(ctx)
+                } catch (e: Exception) {
+                    println("⚠️ Failed to stop foreground service: ${e.message}")
+                }
+            }
+            
+            // ✅ Emit event after cleanup
             emitEvent(
                 UploadProgressEvent(
                     type = "upload-cancelled",
@@ -784,16 +859,6 @@ class NitroCloudUploader(
                     errorMessage = null
                 )
             )
-            
-            cleanup(uploadId)
-            cancelNotification()
-            
-            // ✅ Stop foreground service on cancel
-            try {
-                UploadForegroundService.stopUploadService(appContext)
-            } catch (e: Exception) {
-                println("⚠️ Failed to stop foreground service: ${e.message}")
-            }
             
             promise.resolve(Unit)
         } catch (e: Exception) {
@@ -886,10 +951,17 @@ class NitroCloudUploader(
 
     private fun showNotification(uploadId: String, progress: Int, message: String, isComplete: Boolean = false) {
         try {
+            // ✅ Check if context is available and cache it
+            val ctx = appContext
+            if (ctx == null) {
+                println("⚠️ appContext is null, cannot show notification")
+                return
+            }
+            
             // ✅ Check notification permission for Android 13+ (API 33+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val hasPermission = ContextCompat.checkSelfPermission(
-                    appContext,
+                    ctx,
                     android.Manifest.permission.POST_NOTIFICATIONS
                 ) == PackageManager.PERMISSION_GRANTED
                 
@@ -901,13 +973,13 @@ class NitroCloudUploader(
             }
             
             // ✅ Create intent to open app when notification is tapped
-            val launchIntent = appContext.packageManager.getLaunchIntentForPackage(appContext.packageName)?.apply {
+            val launchIntent = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             
             val pendingIntent = if (launchIntent != null) {
                 PendingIntent.getActivity(
-                    appContext,
+                    ctx,
                     0,
                     launchIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -916,7 +988,7 @@ class NitroCloudUploader(
                 null
             }
             
-            val notification = NotificationCompat.Builder(appContext, NOTIFICATION_CHANNEL_ID)
+            val notification = NotificationCompat.Builder(ctx, NOTIFICATION_CHANNEL_ID)
                 .setContentTitle("Uploading File")
                 .setContentText(message)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)

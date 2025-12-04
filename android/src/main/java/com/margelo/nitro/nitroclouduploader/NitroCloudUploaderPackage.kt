@@ -7,6 +7,8 @@ import com.facebook.react.module.model.ReactModuleInfoProvider
 
 class NitroCloudUploaderPackage : BaseReactPackage() {
     override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? {
+        // Store context for Nitro modules to access
+        appContext = reactContext.applicationContext
         return null
     }
 
@@ -15,6 +17,11 @@ class NitroCloudUploaderPackage : BaseReactPackage() {
     }
 
     companion object {
+        // Static context for Nitro modules (since Nitro uses no-arg constructor)
+        @JvmStatic
+        var appContext: android.content.Context? = null
+            internal set
+
         init {
             System.loadLibrary("nitroclouduploader")
         }
