@@ -1,6 +1,6 @@
 {
   "name": "react-native-nitro-cloud-uploader",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Mutipart File, Images, Audios upload to AWS S3, Cloudflare R2, Backblaze storage solutions with Nitro Modules",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
@@ -78,12 +78,12 @@
     "eslint-plugin-prettier": "^5.5.4",
     "jest": "^29.7.0",
     "lefthook": "^2.0.3",
-    "nitrogen": "^0.29.8",
+    "nitrogen": "^0.35.4",
     "prettier": "^2.8.8",
     "react": "19.1.0",
     "react-native": "0.81.1",
     "react-native-builder-bob": "^0.40.16",
-    "react-native-nitro-modules": "^0.29.8",
+    "react-native-nitro-modules": "^0.35.4",
     "release-it": "^19.0.4",
     "turbo": "^2.5.6",
     "typescript": "^5.9.2"
@@ -170,8 +170,5 @@
       "jest"
     ],
     "version": "0.55.1"
-  },
-  "contributors": [
-    "Punith Manthri <punithm300@gmail.com>"
-  ]
+  }
 }

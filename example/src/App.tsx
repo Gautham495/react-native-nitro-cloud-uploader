@@ -24,7 +24,7 @@ export default function App() {
   const [bytesUploaded, setBytesUploaded] = useState(0);
   const [totalBytes, setTotalBytes] = useState(0);
 
-  const BASE_URL = 'https://your-api.workers.dev';
+  const BASE_URL = 'https://express-d1-app.gauthamvijay.workers.dev';
   const CREATE_UPLOAD_URL = `${BASE_URL}/create-and-start-upload`;
   const COMPLETE_UPLOAD_URL = `${BASE_URL}/complete-upload`;
   const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
@@ -158,6 +158,7 @@ export default function App() {
       }
 
       const fileSize = file.size ?? 0;
+
       const newUploadId = Math.random().toString();
 
       console.log('📁 File selected:', {
@@ -167,6 +168,7 @@ export default function App() {
       });
 
       setUploadId(newUploadId);
+
       setStatus('Creating multipart upload...');
 
       const uploadProps = {
@@ -188,6 +190,7 @@ export default function App() {
       }
 
       createData = await createResponse.json();
+
       const { s3UploadId, parts } = createData;
 
       console.log('✅ Multipart upload created:', {
@@ -233,6 +236,7 @@ export default function App() {
       }
 
       const completeData = await completeResponse.json();
+
       console.log('✅ Upload completed successfully:', completeData);
 
       Alert.alert('Success', 'File uploaded successfully!');
