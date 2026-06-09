@@ -578,8 +578,7 @@ class UploadSession: NSObject {
             let tempDir = FileManager.default.temporaryDirectory
             let tempFileURL = tempDir.appendingPathComponent("chunk_\(uploadId)_\(index).tmp")
             
-            let data = try readChunkData(offset: offset, size: size)
-            try data.write(to: tempFileURL)
+            try streamChunkToFile(offset: offset, size: size, destination: tempFileURL)
             
             guard let url = URL(string: uploadUrls[index]) else {
                 throw NSError(domain: "CloudUploader", code: -1,
@@ -599,12 +598,47 @@ class UploadSession: NSObject {
         }
     }
     
-    private func readChunkData(offset: Int64, size: Int64) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-        
-        try handle.seek(toOffset: UInt64(offset))
-        return handle.readData(ofLength: Int(size))
+    /// Copies a byte range from the source file into a temporary chunk file.
+    ///
+    /// Uses a fixed-size buffer instead of loading the full chunk into memory.
+    /// Throws on short reads to avoid uploading incomplete chunk data.
+    private func streamChunkToFile(offset: Int64, size: Int64, destination: URL) throws {
+        let bufferSize = 256 * 1024 // 256 KB
+        let fm = FileManager.default
+
+        let readHandle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? readHandle.close() }
+        try readHandle.seek(toOffset: UInt64(offset))
+
+        // Recreate the temp file so each chunk write starts from a clean file.
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        guard fm.createFile(atPath: destination.path, contents: nil, attributes: nil) else {
+            throw NSError(domain: "CloudUploader", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to create temp file at \(destination.path)"])
+        }
+
+        do {
+            let writeHandle = try FileHandle(forWritingTo: destination)
+            defer { try? writeHandle.close() }
+
+            var remaining = size
+            while remaining > 0 {
+                let toRead = Int(min(Int64(bufferSize), remaining))
+                let chunk = readHandle.readData(ofLength: toRead)
+                if chunk.isEmpty {
+                    throw NSError(domain: "CloudUploader", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: "Unexpected EOF reading chunk at offset \(offset): wanted \(size) bytes, short by \(remaining)"])
+                }
+                try writeHandle.write(contentsOf: chunk)
+                remaining -= Int64(chunk.count)
+            }
+        } catch {
+            // Remove any partial file so it cannot be uploaded later.
+            try? fm.removeItem(at: destination)
+            throw error
+        }
     }
     
     private func complete() {

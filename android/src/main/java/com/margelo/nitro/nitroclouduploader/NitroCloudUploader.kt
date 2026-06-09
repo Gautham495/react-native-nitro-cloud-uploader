@@ -20,7 +20,6 @@ import androidx.core.app.NotificationCompat
 import com.margelo.nitro.core.Promise
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
@@ -601,15 +600,11 @@ class NitroCloudUploader(
             try {
                 println("📤 Uploading part ${part.partNumber}/${state.totalChunks} (attempt ${retries + 1})")
 
-                // ✅ Read chunk
-                val chunkData = readChunk(filePath, part.offset, part.size)
-
-                // ✅ Upload chunk
+                // Stream the chunk from disk to avoid allocating the full part in memory.
                 val request = Request.Builder()
                     .url(part.url)
-                    .put(chunkData.toRequestBody("application/octet-stream".toMediaType()))
+                    .put(streamingFileChunkBody(filePath, part.offset, part.size))
                     .addHeader("Content-Type", "application/octet-stream")
-                    .addHeader("Content-Length", part.size.toString())
                     .build()
 
                 val response = httpClient.newCall(request).execute()
@@ -722,21 +717,40 @@ class NitroCloudUploader(
         false
     }
 
-    private fun readChunk(filePath: String, offset: Long, size: Long): ByteArray {
-        return RandomAccessFile(File(filePath), "r").use { raf ->
-            if (offset + size > raf.length()) {
-                throw IllegalArgumentException("Invalid chunk bounds: offset=$offset, size=$size, file=${raf.length()}")
+    /**
+     * Streams a byte range from disk into an OkHttp RequestBody.
+     *
+     * Each write uses a fixed-size buffer instead of allocating the full chunk.
+     * The file is reopened for each write so the body can be replayed if OkHttp retries.
+     */
+    private fun streamingFileChunkBody(filePath: String, offset: Long, size: Long): RequestBody {
+        val mediaType = "application/octet-stream".toMediaType()
+        return object : RequestBody() {
+            override fun contentType() = mediaType
+            override fun contentLength() = size
+            override fun writeTo(sink: okio.BufferedSink) {
+                RandomAccessFile(File(filePath), "r").use { raf ->
+                    if (offset + size > raf.length()) {
+                        throw IllegalArgumentException(
+                            "Invalid chunk bounds: offset=$offset, size=$size, file=${raf.length()}",
+                        )
+                    }
+                    raf.seek(offset)
+                    val buffer = ByteArray(256 * 1024) // 256 KB
+                    var remaining = size
+                    while (remaining > 0) {
+                        val toRead = minOf(buffer.size.toLong(), remaining).toInt()
+                        val read = raf.read(buffer, 0, toRead)
+                        if (read <= 0) {
+                            throw java.io.IOException(
+                                "Unexpected EOF at offset ${offset + (size - remaining)}",
+                            )
+                        }
+                        sink.write(buffer, 0, read)
+                        remaining -= read
+                    }
+                }
             }
-            
-            raf.seek(offset)
-            val buffer = ByteArray(size.toInt())
-            val bytesRead = raf.read(buffer)
-            
-            if (bytesRead != size.toInt()) {
-                throw Exception("Read $bytesRead bytes, expected $size")
-            }
-            
-            buffer
         }
     }
 
