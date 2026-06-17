@@ -102,7 +102,7 @@ const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
 ## ⚙️ Basic Usage
 
 ```tsx
-import CloudUploader from 'react-native-nitro-cloud-uploader';
+import { CloudUploader } from 'react-native-nitro-cloud-uploader';
 
 const createResponse = await fetch(CREATE_UPLOAD_URL, {
   method: 'POST',
