@@ -4,9 +4,9 @@ import type { HybridObject } from 'react-native-nitro-modules';
  * Upload progress event for UI updates
  */
 export interface UploadProgressEvent {
- type: string;
+  type: string;
   uploadId: string;
-  progress?: number;           
+  progress?: number;
   bytesUploaded?: number;
   totalBytes?: number;
   chunkIndex?: number;
@@ -42,26 +42,25 @@ export interface UploadState {
  * - Background uploads with optional notifications
  * - Event system for UI feedback
  * - Parallel chunk uploads
- * 
+ *
  * Note: Chunk size is calculated automatically: ceil(fileSize / numberOfURLs)
  */
 export interface NitroCloudUploader
   extends HybridObject<{ ios: 'swift'; android: 'kotlin' }> {
-  
   /**
    * Start uploading a file in chunks
    * - Supports pause/resume/cancel
    * - Automatically handles network drops
    * - Works in background with optional notifications
    * - Uploads multiple chunks in parallel (default: 3)
-   * 
+   *
    * @param uploadId - Unique identifier
    * @param filePath - Local file path (decoded, no file://)
    * @param uploadUrls - Presigned URLs for each chunk
    * @param maxParallel - Number of chunks to upload simultaneously (default: 3)
    * @param showNotification - Show progress notification (default: true)
    * @returns Promise that resolves when upload completes
-   * 
+   *
    * Note: Chunk size is calculated automatically: ceil(fileSize / uploadUrls.length)
    */
   startUpload(
