@@ -1,15 +1,16 @@
 buildscript {
-  ext.getExtOrDefault = {name ->
-    return rootProject.ext.has(name) ? rootProject.ext.get(name) : project.properties['NitroCloudUploader_' + name]
-  }
+  ext.NitroCloudUploader = [
+    kotlinVersion: "2.0.21",
+    minSdkVersion: 24,
+    compileSdkVersion: 37
+  ]
 
-  ext {
-    buildToolsVersion = "36.0.0"
-    minSdkVersion = 24
-    compileSdkVersion = 36
-    targetSdkVersion = 36
-    ndkVersion = "27.1.12297006"
-    kotlinVersion = "2.1.20"
+  ext.getExtOrDefault = { prop ->
+    if (rootProject.ext.has(prop)) {
+      return rootProject.ext.get(prop)
+    }
+
+    return NitroCloudUploader[prop]
   }
 
   repositories {
@@ -19,7 +20,6 @@ buildscript {
 
   dependencies {
     classpath "com.android.tools.build:gradle:8.7.2"
-    // noinspection DifferentKotlinGradleVersion
     classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${getExtOrDefault('kotlinVersion')}"
   }
 }
@@ -43,6 +43,7 @@ android {
   namespace "com.margelo.nitro.nitroclouduploader"
 
   compileSdkVersion getExtOrIntegerDefault("compileSdkVersion")
+  ndkVersion rootProject.ext.get("ndkVersion")
 
   defaultConfig {
     minSdkVersion getExtOrIntegerDefault("minSdkVersion")
@@ -136,13 +137,8 @@ dependencies {
   implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
   implementation project(":react-native-nitro-modules")
 
-   // Kotlin Coroutines (likely already included)
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
-
-    // OkHttp (likely already included)
-    implementation "com.squareup.okhttp3:okhttp:4.12.0"
-
-    // AndroidX Core (for notifications)
-    implementation "androidx.core:core-ktx:1.12.0"
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3"
+  implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+  implementation "com.squareup.okhttp3:okhttp:4.12.0"
+  implementation "androidx.core:core-ktx:1.12.0"
 }

@@ -17,7 +17,7 @@ namespace margelo::nitro::nitroclouduploader {
   using namespace facebook;
 
   /**
-   * The C++ JNI bridge between the C++ struct "UploadState" and the the Kotlin data class "UploadState".
+   * The C++ JNI bridge between the C++ struct "UploadState" and the Kotlin data class "UploadState".
    */
   struct JUploadState final: public jni::JavaClass<JUploadState> {
   public:

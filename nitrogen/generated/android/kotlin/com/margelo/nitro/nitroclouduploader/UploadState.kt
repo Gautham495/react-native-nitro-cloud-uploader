@@ -9,6 +9,7 @@ package com.margelo.nitro.nitroclouduploader
 
 import androidx.annotation.Keep
 import com.facebook.proguard.annotations.DoNotStrip
+import java.util.Objects
 
 
 /**
@@ -40,6 +41,30 @@ data class UploadState(
   val isNetworkAvailable: Boolean
 ) {
   /* primary constructor */
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is UploadState) return false
+    return Objects.deepEquals(this.uploadId, other.uploadId)
+      && Objects.deepEquals(this.state, other.state)
+      && Objects.deepEquals(this.progress, other.progress)
+      && Objects.deepEquals(this.bytesUploaded, other.bytesUploaded)
+      && Objects.deepEquals(this.totalBytes, other.totalBytes)
+      && Objects.deepEquals(this.isPaused, other.isPaused)
+      && Objects.deepEquals(this.isNetworkAvailable, other.isNetworkAvailable)
+  }
+
+  override fun hashCode(): Int {
+    return arrayOf<Any?>(
+      uploadId,
+      state,
+      progress,
+      bytesUploaded,
+      totalBytes,
+      isPaused,
+      isNetworkAvailable
+    ).contentDeepHashCode()
+  }
 
   companion object {
     /**

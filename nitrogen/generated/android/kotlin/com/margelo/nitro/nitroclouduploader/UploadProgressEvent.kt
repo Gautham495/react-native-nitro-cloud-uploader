@@ -9,6 +9,7 @@ package com.margelo.nitro.nitroclouduploader
 
 import androidx.annotation.Keep
 import com.facebook.proguard.annotations.DoNotStrip
+import java.util.Objects
 
 
 /**
@@ -40,6 +41,30 @@ data class UploadProgressEvent(
   val errorMessage: String?
 ) {
   /* primary constructor */
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is UploadProgressEvent) return false
+    return Objects.deepEquals(this.type, other.type)
+      && Objects.deepEquals(this.uploadId, other.uploadId)
+      && Objects.deepEquals(this.progress, other.progress)
+      && Objects.deepEquals(this.bytesUploaded, other.bytesUploaded)
+      && Objects.deepEquals(this.totalBytes, other.totalBytes)
+      && Objects.deepEquals(this.chunkIndex, other.chunkIndex)
+      && Objects.deepEquals(this.errorMessage, other.errorMessage)
+  }
+
+  override fun hashCode(): Int {
+    return arrayOf<Any?>(
+      type,
+      uploadId,
+      progress,
+      bytesUploaded,
+      totalBytes,
+      chunkIndex,
+      errorMessage
+    ).contentDeepHashCode()
+  }
 
   companion object {
     /**

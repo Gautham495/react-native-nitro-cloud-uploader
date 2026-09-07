@@ -13,11 +13,33 @@
 > [!NOTE]
 >
 > - This library was originally created for my production app, where we needed to upload **long audio recordings** and large media files directly from the device — reliably, even when the app was in the background.
-> - It works great with **multipart presigned URLs** for:
->   - Cloudflare R2
->   - Backblaze B2
->   - Any S3-compatible bucket
-> - I haven't tested AWS S3 yet, but it should work without changes.
+> - It works great with **multipart presigned URLs** for any S3-compatible object storage:
+>   - **AWS S3** — the reference implementation
+>   - **Cloudflare R2** — zero egress fees, drop-in S3 API
+>   - **Backblaze B2** — cheapest cold storage with S3 compatibility
+>   - **DigitalOcean Spaces** — S3-compatible, bundled with DO infra
+>   - **Wasabi** — hot storage, no egress fees, S3 API
+>   - **MinIO** — self-hosted S3 for on-prem or private cloud
+>   - **Linode Object Storage / Akamai Cloud** — S3-compatible
+>   - **Vultr Object Storage** — S3-compatible
+>   - **Scaleway Object Storage** — S3-compatible, EU-based
+>   - **Tigris** — globally distributed S3-compatible storage
+>   - **Any custom S3-compatible endpoint** — works as long as the server issues presigned multipart URLs
+>
+> **What you get out of the box:**
+>
+> - True multipart uploads with configurable chunk size and parallelism
+> - Byte-level progress events (not just per-chunk)
+> - Pause, resume, and cancel — mid-upload, on any chunk
+> - Background upload survival on both iOS (URLSession background sessions) and Android (foreground service with notification)
+> - Automatic retry on chunk failure with network loss detection
+> - ETag collection for the final `CompleteMultipartUpload` call
+>
+> **What this library does NOT do** (by design):
+>
+> - Generate presigned URLs — your server does that. This keeps AWS credentials off the device.
+> - Handle non-S3 protocols — no Firebase Storage, no GCS native, no Azure Blob native. Those have their own SDKs and don't speak S3 multipart.
+> - Single-request uploads over ~100MB — use multipart, that's the point.
 >
 > If you need mobile uploads of **huge files** to S3-compatible storage, this library gives you everything you need out of the box.
 
@@ -38,7 +60,7 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 >   - Network drop/restore handling
 >   - Pause/Resume/Cancel controls
 >   - Requires Android 7.0+ (API 24+)
-> - Tested only for React Native 0.81.0 and above. PRs welcome for lower RN versions to make it work and stable for lower versions.
+> - Tested only for React Native 0.85.3 and above. PRs welcome for lower RN versions to make it work and stable for lower versions.
 
 ---
 
@@ -69,10 +91,9 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 > Demo showcases uploading to cloudflare R2 Bucket
 
 ```tsx
-const BASE_URL = 'https://your-api.workers.dev';
+const BASE_URL = 'https://api.gauthamvijay.com';
 const CREATE_UPLOAD_URL = `${BASE_URL}/create-and-start-upload`;
 const COMPLETE_UPLOAD_URL = `${BASE_URL}/complete-upload`;
-const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
 const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
 const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
 ```
@@ -92,10 +113,25 @@ const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
 | Pause/Resume                      | Task suspension                           |
 | Cancel                            | Job cancellation                          |
 | Network monitoring                | Auto-pause/resume on connection loss      |
-| Progress tracking                 | Real-time events                          |
-| Progress notifications            | Native notifications                      |
+| Progress tracking                 | Real-time events (byte-level)             |
+| Progress notifications            | Android foreground-service notification   |
 | Parallel chunk uploads            | Configurable (default: 3)                 |
 | ETag collection                   | Automatic                                 |
+
+---
+
+## 📈 Progress
+
+`upload-progress` fires while bytes leave the device, not only when a chunk finishes:
+
+- **iOS** — `URLSessionTaskDelegate.didSendBodyData`
+- **Android** — a streaming OkHttp request body that counts each 64 KB buffer as it is written
+
+`bytesUploaded` = bytes of acknowledged chunks + bytes sent so far for in-flight chunks. Emits are throttled to ~20 Hz (50 ms) and always fire on chunk completion. A single-URL upload (one presigned/unsigned PUT) reports the same smooth progress as a multipart one. `getUploadState()` reflects the same numbers.
+
+Chunks: exactly one per URL. One URL uploads the whole file in one PUT. Several URLs use `partSize = max(ceil(fileSize / urls), 5 MiB)` — S3-compatible services reject non-final parts below 5 MiB — so the file must be larger than `(urls − 1) × 5 MiB`, otherwise `startUpload` rejects with a clear message.
+
+Retries: 3 attempts per chunk with 1 s / 2 s backoff for network errors, 408/429/5xx. Other 4xx (e.g. `403 SignatureDoesNotMatch`) fail immediately. `chunk-failed` is emitted only when a chunk is given up on. Content-Type is sent as `application/octet-stream`; if your presigned URL is signed with a Content-Type, sign it with that value.
 
 ---
 
@@ -110,11 +146,28 @@ const createResponse = await fetch(CREATE_UPLOAD_URL, {
   body: JSON.stringify({
     uploadId: newUploadId,
     fileSize,
-    chunkSize: 6 * 1024 * 1024, // 6MB chunks for safe chunk uploads
+    chunkSize: 5 * 1024 * 1024, // ≥5 MiB, matches the native minimum
   }),
 });
 
-await CloudUploader.startUpload(newUploadId, filePath, uploadUrls, 3, true);
+CloudUploader.addListener('upload-progress', (e) => {
+  console.log(
+    `${(e.progress! * 100).toFixed(1)}% — ${e.bytesUploaded}/${
+      e.totalBytes
+    } bytes`
+  );
+});
+
+// startUpload(uploadId, filePath, uploadUrls, maxParallel = 3, showNotification = true)
+const result = await CloudUploader.startUpload(
+  newUploadId,
+  filePath,
+  uploadUrls,
+  3,
+  true
+);
+// result.etags is in part order — pass it to your complete-upload endpoint.
+// Single URL: pass [presignedUrl]; the ETag is optional there.
 ```
 
 ---

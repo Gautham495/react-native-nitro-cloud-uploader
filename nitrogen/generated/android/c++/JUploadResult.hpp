@@ -18,7 +18,7 @@ namespace margelo::nitro::nitroclouduploader {
   using namespace facebook;
 
   /**
-   * The C++ JNI bridge between the C++ struct "UploadResult" and the the Kotlin data class "UploadResult".
+   * The C++ JNI bridge between the C++ struct "UploadResult" and the Kotlin data class "UploadResult".
    */
   struct JUploadResult final: public jni::JavaClass<JUploadResult> {
   public:
@@ -41,16 +41,16 @@ namespace margelo::nitro::nitroclouduploader {
       return UploadResult(
         uploadId->toStdString(),
         static_cast<bool>(success),
-        [&]() {
-          size_t __size = etags->size();
+        [&](auto&& __input) {
+          size_t __size = __input->size();
           std::vector<std::string> __vector;
           __vector.reserve(__size);
           for (size_t __i = 0; __i < __size; __i++) {
-            auto __element = etags->getElement(__i);
+            auto __element = __input->getElement(__i);
             __vector.push_back(__element->toStdString());
           }
           return __vector;
-        }()
+        }(etags)
       );
     }
 
@@ -67,16 +67,16 @@ namespace margelo::nitro::nitroclouduploader {
         clazz,
         jni::make_jstring(value.uploadId),
         value.success,
-        [&]() {
-          size_t __size = value.etags.size();
+        [&](auto&& __input) {
+          size_t __size = __input.size();
           jni::local_ref<jni::JArrayClass<jni::JString>> __array = jni::JArrayClass<jni::JString>::newArray(__size);
           for (size_t __i = 0; __i < __size; __i++) {
-            const auto& __element = value.etags[__i];
+            const auto& __element = __input[__i];
             auto __elementJni = jni::make_jstring(__element);
             __array->setElement(__i, *__elementJni);
           }
           return __array;
-        }()
+        }(value.etags)
       );
     }
   };

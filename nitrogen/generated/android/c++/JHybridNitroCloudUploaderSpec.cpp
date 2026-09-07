@@ -65,16 +65,16 @@ namespace margelo::nitro::nitroclouduploader {
   // Methods
   std::shared_ptr<Promise<UploadResult>> JHybridNitroCloudUploaderSpec::startUpload(const std::string& uploadId, const std::string& filePath, const std::vector<std::string>& uploadUrls, std::optional<double> maxParallel, std::optional<bool> showNotification) {
     static const auto method = _javaPart->javaClassStatic()->getMethod<jni::local_ref<JPromise::javaobject>(jni::alias_ref<jni::JString> /* uploadId */, jni::alias_ref<jni::JString> /* filePath */, jni::alias_ref<jni::JArrayClass<jni::JString>> /* uploadUrls */, jni::alias_ref<jni::JDouble> /* maxParallel */, jni::alias_ref<jni::JBoolean> /* showNotification */)>("startUpload");
-    auto __result = method(_javaPart, jni::make_jstring(uploadId), jni::make_jstring(filePath), [&]() {
-      size_t __size = uploadUrls.size();
+    auto __result = method(_javaPart, jni::make_jstring(uploadId), jni::make_jstring(filePath), [&](auto&& __input) {
+      size_t __size = __input.size();
       jni::local_ref<jni::JArrayClass<jni::JString>> __array = jni::JArrayClass<jni::JString>::newArray(__size);
       for (size_t __i = 0; __i < __size; __i++) {
-        const auto& __element = uploadUrls[__i];
+        const auto& __element = __input[__i];
         auto __elementJni = jni::make_jstring(__element);
         __array->setElement(__i, *__elementJni);
       }
       return __array;
-    }(), maxParallel.has_value() ? jni::JDouble::valueOf(maxParallel.value()) : nullptr, showNotification.has_value() ? jni::JBoolean::valueOf(showNotification.value()) : nullptr);
+    }(uploadUrls), maxParallel.has_value() ? jni::JDouble::valueOf(maxParallel.value()) : nullptr, showNotification.has_value() ? jni::JBoolean::valueOf(showNotification.value()) : nullptr);
     return [&]() {
       auto __promise = Promise<UploadResult>::create();
       __result->cthis()->addOnResolvedListener([=](const jni::alias_ref<jni::JObject>& __boxedResult) {

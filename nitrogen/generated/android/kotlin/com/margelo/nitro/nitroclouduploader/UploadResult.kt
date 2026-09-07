@@ -9,6 +9,7 @@ package com.margelo.nitro.nitroclouduploader
 
 import androidx.annotation.Keep
 import com.facebook.proguard.annotations.DoNotStrip
+import java.util.Objects
 
 
 /**
@@ -28,6 +29,22 @@ data class UploadResult(
   val etags: Array<String>
 ) {
   /* primary constructor */
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is UploadResult) return false
+    return Objects.deepEquals(this.uploadId, other.uploadId)
+      && Objects.deepEquals(this.success, other.success)
+      && Objects.deepEquals(this.etags, other.etags)
+  }
+
+  override fun hashCode(): Int {
+    return arrayOf<Any?>(
+      uploadId,
+      success,
+      etags
+    ).contentDeepHashCode()
+  }
 
   companion object {
     /**

@@ -1,248 +1,350 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Text,
-  View,
-  StyleSheet,
   Alert,
-  Platform,
   PermissionsAndroid,
-  TouchableOpacity,
-  StatusBar,
+  Platform,
   ScrollView,
+  StatusBar,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+
 import { pick } from '@react-native-documents/picker';
-import { CloudUploader } from 'react-native-nitro-cloud-uploader';
-import type { UploadProgressEvent } from 'react-native-nitro-cloud-uploader';
+
 import RNFS from 'react-native-fs';
 
+import { CloudUploader } from 'react-native-nitro-cloud-uploader';
+
+import type { UploadProgressEvent } from 'react-native-nitro-cloud-uploader';
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+// 30 MB Audio File - https://cdn.gauthamvijay.com/30.mp3
+// 70 MB Audio File - https://cdn.gauthamvijay.com/70.mp3
+
+const BASE_URL = 'https://api.gauthamvijay.com/r2-uploader';
+
+const CREATE_UPLOAD_URL = `${BASE_URL}/create-and-start-upload`;
+const COMPLETE_UPLOAD_URL = `${BASE_URL}/complete-upload`;
+const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
+const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
+
+const MAX_LOG_LINES = 60;
+
+const TEST_FILES = [
+  {
+    label: '30 MB',
+    url: 'https://cdn.gauthamvijay.com/30.mp3',
+    name: '30.mp3',
+  },
+  {
+    label: '70 MB',
+    url: 'https://cdn.gauthamvijay.com/70.mp3',
+    name: '70.mp3',
+  },
+];
+
+async function downloadTestFile(url: string, name: string) {
+  const dest = `${RNFS.DocumentDirectoryPath}/${name}`;
+  const exists = await RNFS.exists(dest);
+  if (exists) await RNFS.unlink(dest);
+  const { promise } = RNFS.downloadFile({ fromUrl: url, toFile: dest });
+  const result = await promise;
+  if (result.statusCode !== 200) {
+    throw new Error(`HTTP ${result.statusCode}`);
+  }
+  return dest;
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Phase = 'idle' | 'preparing' | 'uploading' | 'paused' | 'done' | 'error';
+
+interface LogEntry {
+  ts: number;
+  type: string;
+  detail: string;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export default function App() {
+  // Upload lifecycle
+  const [phase, setPhase] = useState<Phase>('idle');
   const [uploadId, setUploadId] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState('Ready to upload');
-  const [isUploading, setIsUploading] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
   const [bytesUploaded, setBytesUploaded] = useState(0);
   const [totalBytes, setTotalBytes] = useState(0);
+  const [network, setNetwork] = useState<'online' | 'offline'>('online');
+  const [statusLine, setStatusLine] = useState('Ready.');
+  const [downloading, setDownloading] = useState<Record<string, boolean>>({});
 
-  const BASE_URL = 'https://express-d1-app.gauthamvijay.workers.dev';
-  const CREATE_UPLOAD_URL = `${BASE_URL}/create-and-start-upload`;
-  const COMPLETE_UPLOAD_URL = `${BASE_URL}/complete-upload`;
-  const ABORT_UPLOAD_URL = `${BASE_URL}/abort-upload`;
-  const SINGLE_UPLOAD_URL = `${BASE_URL}/single-upload`;
+  // Options (map 1:1 to the new startUpload params)
+  const [showNotification, setShowNotification] = useState(true);
+  const [maxParallel, setMaxParallel] = useState('3');
 
-  // Setup event listeners
+  // Event log — the actual proof the byte-level progress is firing
+  const [log, setLog] = useState<LogEntry[]>([]);
+  const progressTickCount = useRef(0);
+  const uploadStartAt = useRef<number>(0);
+
+  const pushLog = (type: string, detail = '') => {
+    setLog((prev) => {
+      const next = [{ ts: Date.now(), type, detail }, ...prev];
+      return next.slice(0, MAX_LOG_LINES);
+    });
+  };
+
+  const handleDownloadTestFile = async (url: string, name: string) => {
+    setDownloading((s) => ({ ...s, [name]: true }));
+    try {
+      const path = await downloadTestFile(url, name);
+      pushLog('test-file-downloaded', `${name} → ${path}`);
+      Alert.alert('Downloaded', `${name}\nSaved to app Documents.`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Download failed';
+      pushLog('test-file-failed', `${name}: ${message}`);
+      Alert.alert('Download failed', message);
+    } finally {
+      setDownloading((s) => ({ ...s, [name]: false }));
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Event wiring
+  // -------------------------------------------------------------------------
+
   useEffect(() => {
     const handleEvent = (event: UploadProgressEvent) => {
-      console.log('📡 Event:', event.type, event);
-
       switch (event.type) {
         case 'upload-started':
-          setStatus('Upload started...');
-          setIsUploading(true);
-          setIsPaused(false);
+          uploadStartAt.current = Date.now();
+          progressTickCount.current = 0;
+          setPhase('uploading');
+          setStatusLine('Uploading…');
+          pushLog('upload-started');
           break;
 
         case 'upload-progress':
-          if (event.progress !== undefined) {
-            setProgress(event.progress);
-            setStatus(`Uploading: ${(event.progress * 100).toFixed(1)}%`);
-          }
-          if (event.bytesUploaded !== undefined) {
+          progressTickCount.current += 1;
+          if (event.progress != null) setProgress(event.progress);
+          if (event.bytesUploaded != null)
             setBytesUploaded(event.bytesUploaded);
-          }
-          if (event.totalBytes !== undefined) {
-            setTotalBytes(event.totalBytes);
+          if (event.totalBytes != null) setTotalBytes(event.totalBytes);
+          // Only log every 20th tick — the whole point is that ticks are frequent.
+          if (progressTickCount.current % 20 === 1) {
+            pushLog(
+              'upload-progress',
+              `${((event.progress ?? 0) * 100).toFixed(1)}%`
+            );
           }
           break;
 
         case 'upload-paused':
-          setStatus('Upload paused');
-          setIsPaused(true);
+          setPhase('paused');
+          setStatusLine('Paused.');
+          pushLog('upload-paused');
           break;
 
         case 'upload-resumed':
-          setStatus('Upload resumed');
-          setIsPaused(false);
+          setPhase('uploading');
+          setStatusLine('Uploading…');
+          pushLog('upload-resumed');
           break;
 
-        case 'upload-completed':
-          setStatus('✅ Upload completed!');
+        case 'upload-completed': {
+          const elapsed = (Date.now() - uploadStartAt.current) / 1000;
+          setPhase('done');
           setProgress(1);
-          setIsUploading(false);
-          setIsPaused(false);
+          setStatusLine(
+            `Done in ${elapsed.toFixed(1)}s · ${
+              progressTickCount.current
+            } ticks`
+          );
+          pushLog(
+            'upload-completed',
+            `${elapsed.toFixed(1)}s, ${
+              progressTickCount.current
+            } progress ticks`
+          );
           break;
+        }
 
         case 'upload-failed':
-          setStatus(
-            `❌ Upload failed: ${event.errorMessage || 'Unknown error'}`
-          );
-          setIsUploading(false);
-          setIsPaused(false);
+          setPhase('error');
+          setStatusLine(event.errorMessage ?? 'Upload failed');
+          pushLog('upload-failed', event.errorMessage ?? '');
           break;
 
         case 'upload-cancelled':
-          setStatus('Upload cancelled');
-          setIsUploading(false);
-          setIsPaused(false);
+          setPhase('idle');
+          setStatusLine('Cancelled.');
+          pushLog('upload-cancelled');
           break;
 
         case 'chunk-completed':
-          console.log('✅ Chunk completed:', event.chunkIndex);
+          pushLog('chunk-completed', `part ${(event.chunkIndex ?? 0) + 1}`);
           break;
 
         case 'chunk-failed':
-          console.log('❌ Chunk failed:', event.chunkIndex, event.errorMessage);
+          pushLog(
+            'chunk-failed',
+            `part ${(event.chunkIndex ?? 0) + 1}: ${event.errorMessage ?? ''}`
+          );
           break;
 
         case 'network-lost':
-          setStatus('⚠️ Network lost - upload paused');
+          setNetwork('offline');
+          setStatusLine('Network lost — waiting.');
+          pushLog('network-lost');
           break;
 
         case 'network-restored':
-          setStatus('📡 Network restored - resuming');
+          setNetwork('online');
+          pushLog('network-restored');
           break;
       }
     };
 
     try {
       CloudUploader.addListener('all', handleEvent);
-      console.log('✅ Event listener registered');
     } catch (error) {
-      console.error('Failed to add listener:', error);
+      console.error('addListener failed:', error);
     }
-
     return () => {
       try {
         CloudUploader.removeListener('all');
       } catch (error) {
-        console.error('Failed to remove listener:', error);
+        console.error('removeListener failed:', error);
       }
     };
   }, []);
 
-  async function normalizeAndroidFilePath(uri: string) {
-    if (uri.startsWith('content://')) {
+  // -------------------------------------------------------------------------
+  // Android notification permission (13+)
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    (async () => {
+      if (Platform.OS !== 'android') return;
+      if ((Platform.Version as number) < 33) return;
       try {
-        const dest = `${RNFS.CachesDirectoryPath}/${Date.now()}.tmp`;
-        await RNFS.copyFile(uri, dest);
-        return dest;
+        await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+        );
       } catch (e) {
-        console.log('❌ Failed to copy content://', e);
-        throw e;
+        console.error('permission error', e);
       }
+    })();
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // File path handling
+  // -------------------------------------------------------------------------
+
+  async function resolvePickedPath(uri: string) {
+    if (Platform.OS === 'android' && uri.startsWith('content://')) {
+      const dest = `${RNFS.CachesDirectoryPath}/${Date.now()}.tmp`;
+      await RNFS.copyFile(uri, dest);
+      return dest;
     }
-    return uri.replace('file://', '');
+    return decodeURIComponent(uri.replace('file://', ''));
   }
 
-  const startUpload = async () => {
+  // -------------------------------------------------------------------------
+  // Multipart upload
+  // -------------------------------------------------------------------------
+
+  const runMultipart = async () => {
     let createData: any = null;
-    const uploadTo = 'r2'; // 'r2' || 'b2'
+    const uploadTo = 'r2';
+
+    resetState();
 
     try {
-      setStatus('Picking file...');
+      setPhase('preparing');
+      setStatusLine('Picking file…');
 
       const files = await pick();
       const file = files[0];
-
       if (!file) {
-        setStatus('No file selected');
+        setPhase('idle');
+        setStatusLine('No file selected.');
         return;
       }
 
-      let filePath: string;
-
-      if (Platform.OS === 'android') {
-        filePath = await normalizeAndroidFilePath(file.uri);
-      } else {
-        filePath = decodeURIComponent(file.uri.replace('file://', ''));
-      }
-
+      const filePath = await resolvePickedPath(file.uri);
       const fileSize = file.size ?? 0;
-
-      const newUploadId = Math.random().toString();
-
-      console.log('📁 File selected:', {
-        name: file.name,
-        size: fileSize,
-        path: filePath,
-      });
+      const newUploadId = Math.random().toString(36).slice(2);
 
       setUploadId(newUploadId);
-
-      setStatus('Creating multipart upload...');
-
-      const uploadProps = {
-        uploadId: newUploadId,
-        fileSize,
-        chunkSize: 6 * 1024 * 1024,
-        uploadTo: uploadTo,
-      };
+      setFileName(file.name ?? 'file');
+      setTotalBytes(fileSize);
+      setStatusLine('Requesting presigned URLs…');
+      pushLog('pick', `${file.name} · ${formatBytes(fileSize)}`);
 
       const createResponse = await fetch(CREATE_UPLOAD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(uploadProps),
+        body: JSON.stringify({
+          uploadId: newUploadId,
+          fileSize,
+          chunkSize: 6 * 1024 * 1024,
+          uploadTo,
+        }),
       });
-
       if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        throw new Error(`Failed to create upload: ${errorText}`);
+        throw new Error(`create-upload: ${await createResponse.text()}`);
       }
-
       createData = await createResponse.json();
-
       const { s3UploadId, parts } = createData;
-
-      console.log('✅ Multipart upload created:', {
-        s3UploadId,
-        partCount: parts.length,
-      });
-
       const uploadUrls = parts.map((p: any) => p.url);
-      setStatus('Starting upload...');
+      pushLog('create-upload', `${parts.length} parts`);
+
+      const parallel = clampInt(maxParallel, 1, 10, 3);
 
       const result = await CloudUploader.startUpload(
         newUploadId,
         filePath,
         uploadUrls,
-        3,
-        true
+        parallel,
+        showNotification
       );
 
-      if (!result.success) {
-        throw new Error('Upload failed');
-      }
+      if (!result.success) throw new Error('Upload reported failure');
 
-      console.log('✅ All chunks uploaded:', result.etags);
-      setStatus('Completing upload...');
-
+      setStatusLine('Finalizing…');
       const completeResponse = await fetch(COMPLETE_UPLOAD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           uploadId: newUploadId,
           s3UploadId,
-          parts: result.etags.map((etag, index) => ({
-            partNumber: index + 1,
-            etag: etag,
+          parts: result.etags.map((etag, i) => ({
+            partNumber: i + 1,
+            etag,
           })),
-          uploadTo: uploadTo,
+          uploadTo,
         }),
       });
-
       if (!completeResponse.ok) {
-        const errorText = await completeResponse.text();
-        throw new Error(`Failed to complete upload: ${errorText}`);
+        throw new Error(`complete: ${await completeResponse.text()}`);
       }
-
-      const completeData = await completeResponse.json();
-
-      console.log('✅ Upload completed successfully:', completeData);
-
-      Alert.alert('Success', 'File uploaded successfully!');
+      pushLog('complete-upload', 'ok');
+      Alert.alert('Uploaded', `${file.name} · ${formatBytes(fileSize)}`);
     } catch (error) {
-      console.error('❌ Upload error:', error);
-
+      console.error(error);
       if (createData?.s3UploadId) {
         try {
           await fetch(ABORT_UPLOAD_URL, {
@@ -251,485 +353,746 @@ export default function App() {
             body: JSON.stringify({
               uploadId: uploadId,
               s3UploadId: createData.s3UploadId,
-              uploadTo: uploadTo,
+              uploadTo,
             }),
           });
+          pushLog('abort-upload', 'ok');
         } catch (abortError) {
-          console.error('Failed to abort:', abortError);
+          console.error('abort failed', abortError);
         }
       }
-
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Upload failed'
-      );
+      const message = error instanceof Error ? error.message : 'Upload failed';
+      setStatusLine(message);
+      setPhase('error');
+      Alert.alert('Upload failed', message);
     }
   };
 
-  const startSingleUpload = async () => {
+  // -------------------------------------------------------------------------
+  // Single-URL upload (small file path)
+  // -------------------------------------------------------------------------
+
+  const runSingle = async () => {
     let createData: any = null;
     const uploadTo = 'r2';
 
+    resetState();
+
     try {
-      setStatus('Picking file...');
+      setPhase('preparing');
+      setStatusLine('Picking file…');
 
       const files = await pick();
       const file = files[0];
-
       if (!file) {
-        setStatus('No file selected');
+        setPhase('idle');
+        setStatusLine('No file selected.');
         return;
       }
 
-      let filePath: string;
-
-      if (Platform.OS === 'android') {
-        filePath = await normalizeAndroidFilePath(file.uri);
-      } else {
-        filePath = decodeURIComponent(file.uri.replace('file://', ''));
-      }
-
+      const filePath = await resolvePickedPath(file.uri);
       const fileSize = file.size ?? 0;
-      const newUploadId = Math.random().toString();
-
-      console.log('📁 File selected:', {
-        name: file.name,
-        size: fileSize,
-        path: filePath,
-      });
+      const newUploadId = Math.random().toString(36).slice(2);
 
       setUploadId(newUploadId);
-      setStatus('Creating single upload...');
-
-      const uploadProps = {
-        uploadId: newUploadId,
-        fileName: file.name,
-        uploadTo: uploadTo,
-      };
+      setFileName(file.name ?? 'file');
+      setTotalBytes(fileSize);
+      pushLog('pick', `${file.name} · ${formatBytes(fileSize)}`);
 
       const createResponse = await fetch(SINGLE_UPLOAD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(uploadProps),
+        body: JSON.stringify({
+          uploadId: newUploadId,
+          fileName: file.name,
+          uploadTo,
+        }),
       });
-
       if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        throw new Error(`Failed to create upload: ${errorText}`);
+        throw new Error(`single-upload: ${await createResponse.text()}`);
       }
-
       createData = await createResponse.json();
-
-      setStatus('Starting upload...');
-
-      console.log(createData, 'createdData');
+      pushLog('single-upload', 'presigned URL received');
 
       const result = await CloudUploader.startUpload(
         newUploadId,
         filePath,
         [createData.url],
         1,
-        true
+        showNotification
       );
+      if (!result.success) throw new Error('Upload reported failure');
 
-      if (!result.success) {
-        throw new Error('Upload failed');
-      }
-
-      Alert.alert('Success', 'File uploaded successfully!');
-      console.log('✅ Public URL:', createData);
+      Alert.alert('Uploaded', `${file.name}`);
     } catch (error) {
-      console.error('❌ Upload error:', error);
-
-      if (createData?.s3UploadId) {
-        try {
-          await fetch(ABORT_UPLOAD_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uploadId: uploadId,
-              s3UploadId: createData.s3UploadId,
-              uploadTo: uploadTo,
-            }),
-          });
-        } catch (abortError) {
-          console.error('Failed to abort:', abortError);
-        }
-      }
-
-      Alert.alert(
-        'Error',
-        error instanceof Error ? error.message : 'Upload failed'
-      );
+      console.error(error);
+      const message = error instanceof Error ? error.message : 'Upload failed';
+      setStatusLine(message);
+      setPhase('error');
+      Alert.alert('Upload failed', message);
     }
   };
 
-  const pause = async () => {
+  // -------------------------------------------------------------------------
+  // Controls
+  // -------------------------------------------------------------------------
+
+  const pauseCurrent = async () => {
     if (!uploadId) return;
     try {
       await CloudUploader.pauseUpload(uploadId);
-    } catch (error) {
-      console.error('Failed to pause:', error);
+    } catch (e) {
+      console.error('pause failed', e);
     }
   };
 
-  const resume = async () => {
+  const resumeCurrent = async () => {
     if (!uploadId) return;
     try {
       await CloudUploader.resumeUpload(uploadId);
-    } catch (error) {
-      console.error('Failed to resume:', error);
+    } catch (e) {
+      console.error('resume failed', e);
     }
   };
 
-  const cancel = async () => {
+  const cancelCurrent = async () => {
     if (!uploadId) return;
     try {
       await CloudUploader.cancelUpload(uploadId);
-      setUploadId(null);
-      setProgress(0);
-      setBytesUploaded(0);
-      setTotalBytes(0);
-      setStatus('Upload cancelled');
-    } catch (error) {
-      console.error('Failed to cancel:', error);
+    } catch (e) {
+      console.error('cancel failed', e);
     }
   };
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
+  const resetState = () => {
+    setProgress(0);
+    setBytesUploaded(0);
+    setTotalBytes(0);
+    setLog([]);
+    progressTickCount.current = 0;
   };
 
-  const requestAndroidPermissions = async () => {
-    if (Platform.OS !== 'android') {
-      return true;
-    }
+  // -------------------------------------------------------------------------
+  // Derived
+  // -------------------------------------------------------------------------
 
-    try {
-      if (Platform.Version >= 33) {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
-          {
-            title: 'Notification Permission',
-            message:
-              'App needs permission to show upload progress notifications.',
-            buttonNeutral: 'Ask Me Later',
-            buttonNegative: 'Cancel',
-            buttonPositive: 'OK',
-          }
-        );
+  const throughput = (() => {
+    if (phase !== 'uploading' || bytesUploaded === 0) return null;
+    const seconds = (Date.now() - uploadStartAt.current) / 1000;
+    if (seconds < 0.5) return null;
+    return `${formatBytes(bytesUploaded / seconds)}/s`;
+  })();
 
-        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-          console.log('✅ Notification permission granted');
-          return true;
-        } else {
-          console.log('⚠️ Notification permission denied');
-          Alert.alert(
-            'Notification Permission',
-            "Notifications are disabled. You won't see upload progress.",
-            [{ text: 'OK' }]
-          );
-          return false;
-        }
-      } else {
-        console.log('✅ Notification permission not required for Android < 13');
-        return true;
-      }
-    } catch (err) {
-      console.error('❌ Notification permission error:', err);
-      return false;
-    }
-  };
+  const busy =
+    phase === 'uploading' || phase === 'paused' || phase === 'preparing';
+  const canControl = phase === 'uploading' || phase === 'paused';
 
-  useEffect(() => {
-    requestAndroidPermissions();
-  }, []);
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#6366f1" />
-
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>☁️ Cloud Uploader</Text>
-        <Text style={styles.headerSubtitle}>Secure & Fast File Uploads</Text>
-      </View>
-
+    <View style={S.root}>
+      <StatusBar barStyle="dark-content" backgroundColor="#fafaf9" />
       <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={S.scroll}
         showsVerticalScrollIndicator={false}
       >
-        {/* Status Card */}
-        <View style={styles.statusCard}>
-          <View style={styles.statusHeader}>
-            <Text style={styles.statusLabel}>STATUS</Text>
+        {/* --- Header ------------------------------------------------- */}
+        <View style={S.header}>
+          <Text style={S.headerTitle}>nitro-cloud-uploader</Text>
+          <Text style={S.headerMeta}>
+            {Platform.OS === 'android' ? 'Android' : 'iOS'}{' '}
+            {Platform.Version.toString()}
+          </Text>
+        </View>
+
+        {/* --- Progress card ------------------------------------------ */}
+        <View style={S.card}>
+          <View style={S.cardHeader}>
+            <View style={[S.dot, dotStyle(phase, network)]} />
+            <Text style={S.cardHeaderText}>
+              {fileName ?? 'No file selected'}
+            </Text>
+          </View>
+
+          <View style={S.progressRow}>
+            <Text style={S.progressPct}>
+              {(progress * 100).toFixed(1)}
+              <Text style={S.progressPctSuffix}>%</Text>
+            </Text>
+            <View style={S.progressMetrics}>
+              <Text style={S.metric}>
+                {formatBytes(bytesUploaded)}
+                <Text style={S.metricMuted}> / {formatBytes(totalBytes)}</Text>
+              </Text>
+              {throughput && <Text style={S.metricMuted}>{throughput}</Text>}
+            </View>
+          </View>
+
+          <View style={S.track}>
             <View
               style={[
-                styles.statusIndicator,
-                isUploading && !isPaused && styles.statusIndicatorActive,
-                isPaused && styles.statusIndicatorPaused,
+                S.trackFill,
+                { width: `${Math.max(0, Math.min(1, progress)) * 100}%` },
+                phase === 'paused' && S.trackFillPaused,
+                phase === 'error' && S.trackFillError,
               ]}
             />
           </View>
-          <Text style={styles.statusText}>{status}</Text>
 
-          {totalBytes > 0 && (
-            <View style={styles.bytesContainer}>
-              <Text style={styles.bytesText}>
-                {formatBytes(bytesUploaded)} / {formatBytes(totalBytes)}
-              </Text>
-              <Text style={styles.percentageText}>
-                {(progress * 100).toFixed(1)}%
-              </Text>
+          <Text style={S.statusLine}>{statusLine}</Text>
+        </View>
+
+        {/* --- Actions ------------------------------------------------ */}
+        <View style={S.actions}>
+          <TouchableOpacity
+            style={[S.actionBtn, S.actionPrimary, busy && S.actionDisabled]}
+            onPress={runMultipart}
+            disabled={busy}
+            activeOpacity={0.6}
+          >
+            <Text style={S.actionPrimaryText}>Start multipart upload</Text>
+            <Text style={S.actionPrimaryHint}>
+              Presigned URLs · resumable · background
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[S.actionBtn, S.actionGhost, busy && S.actionDisabled]}
+            onPress={runSingle}
+            disabled={busy}
+            activeOpacity={0.6}
+          >
+            <Text style={S.actionGhostText}>Single-URL upload</Text>
+          </TouchableOpacity>
+
+          {canControl && (
+            <View style={S.controlRow}>
+              {phase === 'uploading' ? (
+                <TouchableOpacity
+                  style={[S.control, S.controlNeutral]}
+                  onPress={pauseCurrent}
+                  activeOpacity={0.6}
+                >
+                  <Text style={S.controlText}>Pause</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[S.control, S.controlAccent]}
+                  onPress={resumeCurrent}
+                  activeOpacity={0.6}
+                >
+                  <Text style={[S.controlText, S.controlTextInvert]}>
+                    Resume
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[S.control, S.controlDanger]}
+                onPress={cancelCurrent}
+                activeOpacity={0.6}
+              >
+                <Text style={[S.controlText, S.controlTextInvert]}>Cancel</Text>
+              </TouchableOpacity>
             </View>
           )}
+        </View>
 
-          {/* Progress Bar */}
-          <View style={styles.progressBarContainer}>
-            <View
-              style={[
-                styles.progressBar,
-                { width: `${progress * 100}%` },
-                isPaused && styles.progressBarPaused,
-              ]}
+        {/* --- Options ------------------------------------------------ */}
+        <View style={S.card}>
+          <Text style={S.sectionLabel}>Options</Text>
+
+          <OptionRow
+            label="Show progress notification"
+            hint={
+              Platform.OS === 'android'
+                ? 'Foreground service notification'
+                : 'no-op on iOS'
+            }
+            value={showNotification}
+            onChange={setShowNotification}
+            disabled={busy}
+          />
+
+          <View style={S.optionRow}>
+            <View style={S.optionText}>
+              <Text style={S.optionLabel}>Parallel chunks</Text>
+              <Text style={S.optionHint}>1–10; default 3</Text>
+            </View>
+            <TextInput
+              value={maxParallel}
+              onChangeText={setMaxParallel}
+              keyboardType="number-pad"
+              editable={!busy}
+              style={S.numberInput}
+              maxLength={2}
             />
           </View>
         </View>
 
-        {/* Upload Buttons */}
-        <View style={styles.buttonsContainer}>
-          <TouchableOpacity
-            style={[styles.button, styles.primaryButton]}
-            onPress={startUpload}
-            activeOpacity={0.7}
-            disabled={isUploading}
-          >
-            <Text style={styles.buttonIcon}>📦</Text>
-            <Text style={styles.buttonText}>Multipart Upload</Text>
-            <Text style={styles.buttonSubtext}>For large files</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.button, styles.secondaryButton]}
-            onPress={startSingleUpload}
-            activeOpacity={0.7}
-            disabled={isUploading}
-          >
-            <Text style={styles.buttonIcon}>📄</Text>
-            <Text style={styles.buttonText}>Single Upload</Text>
-            <Text style={styles.buttonSubtext}>For small files</Text>
-          </TouchableOpacity>
+        <View style={S.card}>
+          <Text style={S.sectionLabel}>Test files</Text>
+          <Text style={S.optionHint}>
+            Download into app Documents, then pick with the uploader.
+          </Text>
+          <View style={S.testFileRow}>
+            {TEST_FILES.map((f) => {
+              const isDownloading = downloading[f.name];
+              return (
+                <TouchableOpacity
+                  key={f.name}
+                  style={[
+                    S.actionBtn,
+                    S.actionGhost,
+                    S.testFileBtn,
+                    isDownloading && S.actionDisabled,
+                  ]}
+                  onPress={() => handleDownloadTestFile(f.url, f.name)}
+                  disabled={isDownloading}
+                  activeOpacity={0.6}
+                >
+                  <Text style={S.actionGhostText}>
+                    {isDownloading ? 'Downloading…' : `Download ${f.label}`}
+                  </Text>
+                  <Text style={S.optionHint}>{f.name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
-        {/* Control Buttons */}
-        {isUploading && (
-          <View style={styles.controlsContainer}>
-            {!isPaused ? (
-              <TouchableOpacity
-                style={[styles.controlButton, styles.pauseButton]}
-                onPress={pause}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.controlButtonText}>⏸️ Pause</Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[styles.controlButton, styles.resumeButton]}
-                onPress={resume}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.controlButtonText}>▶️ Resume</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={[styles.controlButton, styles.cancelButton]}
-              onPress={cancel}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.controlButtonText}>⏹️ Cancel</Text>
-            </TouchableOpacity>
+        {/* --- Event log ---------------------------------------------- */}
+        <View style={[S.card, S.logCard]}>
+          <View style={S.logHeader}>
+            <Text style={S.sectionLabel}>Event stream</Text>
+            <Text style={S.logCount}>{progressTickCount.current} ticks</Text>
           </View>
-        )}
+          {log.length === 0 ? (
+            <Text style={S.logEmpty}>
+              No events yet. Start an upload to watch progress ticks fire in
+              real time.
+            </Text>
+          ) : (
+            <View style={S.logList}>
+              {log.map((entry, i) => (
+                <View
+                  key={`${entry.ts}-${i}`}
+                  style={[S.logRow, i === 0 && S.logRowLatest]}
+                >
+                  <Text style={S.logTs}>{formatTs(entry.ts)}</Text>
+                  <Text style={[S.logType, eventColor(entry.type)]}>
+                    {entry.type}
+                  </Text>
+                  {!!entry.detail && (
+                    <Text style={S.logDetail} numberOfLines={1}>
+                      {entry.detail}
+                    </Text>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
+        <Text style={S.footer}>react-native-nitro-cloud-uploader</Text>
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
+// ---------------------------------------------------------------------------
+// Subcomponents
+// ---------------------------------------------------------------------------
+
+function OptionRow({
+  label,
+  hint,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  hint: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <View style={[S.optionRow, disabled && S.optionRowDisabled]}>
+      <View style={S.optionText}>
+        <Text style={S.optionLabel}>{label}</Text>
+        <Text style={S.optionHint}>{hint}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled}
+        trackColor={{ false: '#e7e5e4', true: '#111827' }}
+        thumbColor="#fafaf9"
+      />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatBytes(bytes: number) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(
+    sizes.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(k))
+  );
+  const value = bytes / Math.pow(k, i);
+  return `${value < 10 ? value.toFixed(2) : value.toFixed(1)} ${sizes[i]}`;
+}
+
+function formatTs(ts: number) {
+  const d = new Date(ts);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${d
+    .getMilliseconds()
+    .toString()
+    .padStart(3, '0')}`;
+}
+
+function clampInt(s: string, min: number, max: number, fallback: number) {
+  const n = parseInt(s, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function dotStyle(phase: Phase, network: 'online' | 'offline') {
+  if (network === 'offline') return { backgroundColor: '#f59e0b' };
+  switch (phase) {
+    case 'uploading':
+      return { backgroundColor: '#16a34a' };
+    case 'paused':
+      return { backgroundColor: '#f59e0b' };
+    case 'done':
+      return { backgroundColor: '#111827' };
+    case 'error':
+      return { backgroundColor: '#dc2626' };
+    default:
+      return { backgroundColor: '#d6d3d1' };
+  }
+}
+
+function eventColor(type: string) {
+  if (type.startsWith('chunk-completed') || type === 'upload-completed')
+    return { color: '#16a34a' };
+  if (type.includes('failed') || type === 'upload-cancelled')
+    return { color: '#dc2626' };
+  if (type.includes('network')) return { color: '#f59e0b' };
+  if (type === 'upload-progress') return { color: '#57534e' };
+  return { color: '#111827' };
+}
+
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
+
+const S = StyleSheet.create({
+  root: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#fafaf9',
   },
-  header: {
-    backgroundColor: '#6366f1',
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
-    paddingBottom: 30,
-    paddingHorizontal: 24,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  headerTitle: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#ffffff',
-    marginBottom: 4,
-  },
-  headerSubtitle: {
-    fontSize: 16,
-    color: '#e0e7ff',
-    fontWeight: '500',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
+  scroll: {
     padding: 20,
+    paddingTop: Platform.OS === 'ios' ? 65 : 60,
     paddingBottom: 40,
   },
-  statusCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 20,
-    padding: 24,
+
+  // Header
+  header: {
     marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
   },
-  statusHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  statusLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#94a3b8',
-    letterSpacing: 1,
-  },
-  statusIndicator: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#cbd5e1',
-  },
-  statusIndicatorActive: {
-    backgroundColor: '#22c55e',
-  },
-  statusIndicatorPaused: {
-    backgroundColor: '#f59e0b',
-  },
-  statusText: {
-    fontSize: 18,
+  headerTitle: {
+    fontSize: 22,
     fontWeight: '600',
-    color: '#1e293b',
-    marginBottom: 16,
+    color: '#111827',
+    letterSpacing: -0.5,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
   },
-  bytesContainer: {
+  headerMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#78716c',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+
+  // Card
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 18,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#f5f5f4',
+  },
+  cardHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 14,
+  },
+  cardHeaderText: {
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '500',
+    flex: 1,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#78716c',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
     marginBottom: 12,
   },
-  bytesText: {
-    fontSize: 14,
-    color: '#64748b',
-    fontWeight: '500',
-  },
-  percentageText: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#6366f1',
-  },
-  progressBarContainer: {
-    width: '100%',
+
+  // Status dot
+  dot: {
+    width: 8,
     height: 8,
-    backgroundColor: '#e2e8f0',
     borderRadius: 4,
+    marginRight: 10,
+  },
+
+  // Progress
+  progressRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  progressPct: {
+    fontSize: 34,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -1,
+    fontVariant: ['tabular-nums'],
+  },
+  progressPctSuffix: {
+    fontSize: 18,
+    fontWeight: '500',
+    color: '#78716c',
+  },
+  progressMetrics: {
+    alignItems: 'flex-end',
+  },
+  metric: {
+    fontSize: 13,
+    color: '#111827',
+    fontVariant: ['tabular-nums'],
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+  metricMuted: {
+    fontSize: 12,
+    color: '#78716c',
+    marginTop: 2,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+  track: {
+    height: 4,
+    backgroundColor: '#f5f5f4',
+    borderRadius: 2,
     overflow: 'hidden',
   },
-  progressBar: {
+  trackFill: {
     height: '100%',
-    backgroundColor: '#6366f1',
-    borderRadius: 4,
+    backgroundColor: '#111827',
   },
-  progressBarPaused: {
-    backgroundColor: '#f59e0b',
+  trackFillPaused: { backgroundColor: '#f59e0b' },
+  trackFillError: { backgroundColor: '#dc2626' },
+
+  statusLine: {
+    marginTop: 12,
+    fontSize: 12,
+    color: '#57534e',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
   },
-  buttonsContainer: {
-    marginBottom: 20,
+
+  // Actions
+  actions: {
+    marginBottom: 14,
   },
-  button: {
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
+  actionBtn: {
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    alignItems: 'flex-start',
+  },
+  actionPrimary: {
+    backgroundColor: '#111827',
+  },
+  actionPrimaryText: {
+    color: '#fafaf9',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  actionPrimaryHint: {
+    color: '#a8a29e',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  actionGhost: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e7e5e4',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
   },
-  primaryButton: {
-    backgroundColor: '#6366f1',
-  },
-  secondaryButton: {
-    backgroundColor: '#8b5cf6',
-  },
-  buttonIcon: {
-    fontSize: 40,
-    marginBottom: 8,
-  },
-  buttonText: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: 4,
-  },
-  buttonSubtext: {
-    fontSize: 13,
-    color: '#e0e7ff',
+  actionGhostText: {
+    color: '#111827',
+    fontSize: 14,
     fontWeight: '500',
   },
-  controlsContainer: {
+  actionDisabled: {
+    opacity: 0.4,
+  },
+
+  controlRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 8,
+    marginTop: 4,
   },
-  controlButton: {
+  control: {
     flex: 1,
-    borderRadius: 12,
-    padding: 16,
+    borderRadius: 8,
+    paddingVertical: 12,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
   },
-  pauseButton: {
-    backgroundColor: '#f59e0b',
+  controlNeutral: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e7e5e4',
   },
-  resumeButton: {
-    backgroundColor: '#22c55e',
+  controlAccent: {
+    backgroundColor: '#16a34a',
   },
-  cancelButton: {
-    backgroundColor: '#ef4444',
+  controlDanger: {
+    backgroundColor: '#dc2626',
   },
-  controlButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#ffffff',
+  controlText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  controlTextInvert: {
+    color: '#fafaf9',
+  },
+
+  // Options
+  optionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f5f5f4',
+  },
+  optionRowDisabled: {
+    opacity: 0.5,
+  },
+  optionText: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  optionLabel: {
+    fontSize: 14,
+    color: '#111827',
+    fontWeight: '500',
+  },
+  optionHint: {
+    fontSize: 12,
+    color: '#78716c',
+    marginTop: 2,
+  },
+  numberInput: {
+    width: 50,
+    borderWidth: 1,
+    borderColor: '#e7e5e4',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    textAlign: 'center',
+    color: '#111827',
+    fontVariant: ['tabular-nums'],
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+
+  // Log
+  logCard: {
+    paddingBottom: 8,
+  },
+  logHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 8,
+  },
+  logCount: {
+    fontSize: 11,
+    color: '#78716c',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+  logEmpty: {
+    fontSize: 12,
+    color: '#a8a29e',
+    lineHeight: 18,
+    paddingVertical: 8,
+  },
+  logList: {
+    // negative margin so rows sit tight
+  },
+  logRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    paddingVertical: 4,
+    borderTopWidth: 1,
+    borderTopColor: '#fafaf9',
+  },
+  logRowLatest: {
+    borderTopWidth: 0,
+  },
+  logTs: {
+    fontSize: 10,
+    color: '#a8a29e',
+    width: 88,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+  logType: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginRight: 8,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+  logDetail: {
+    flex: 1,
+    fontSize: 11,
+    color: '#57534e',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+
+  footer: {
+    marginTop: 12,
+    textAlign: 'center',
+    fontSize: 10,
+    color: '#a8a29e',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
+  },
+
+  testFileRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  testFileBtn: {
+    flex: 1,
+    marginBottom: 0,
+    alignItems: 'center',
   },
 });

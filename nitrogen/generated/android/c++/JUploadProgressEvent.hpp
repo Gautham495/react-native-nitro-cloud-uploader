@@ -18,7 +18,7 @@ namespace margelo::nitro::nitroclouduploader {
   using namespace facebook;
 
   /**
-   * The C++ JNI bridge between the C++ struct "UploadProgressEvent" and the the Kotlin data class "UploadProgressEvent".
+   * The C++ JNI bridge between the C++ struct "UploadProgressEvent" and the Kotlin data class "UploadProgressEvent".
    */
   struct JUploadProgressEvent final: public jni::JavaClass<JUploadProgressEvent> {
   public:
