@@ -48,7 +48,8 @@
     "aws-s3",
     "cloudflare-r2",
     "s3-compatible",
-    "nitromodule"
+    "nitromodule",
+    "multi-part"
   ],
   "repository": {
     "type": "git",
