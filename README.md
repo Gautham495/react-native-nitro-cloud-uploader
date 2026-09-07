@@ -88,7 +88,8 @@ npm install react-native-nitro-cloud-uploader react-native-nitro-modules
 > S3 multipart **PUT** uploads require a **minimum chunk size of 5 MB**, so this library defaults to splitting files into 5 MB parts to prevent upload issues.
 >
 > You must implement your own backend endpoint to generate the multipart presigned URLs. Once provided, the library automatically handles uploading each part and storing the returned **ETag** values for you.
-> Demo showcases uploading to cloudflare R2 Bucket
+> Demo showcases uploading to my Cloudflare R2 Bucket called test-bucket - which you can use to test your integration.
+> The files will be automatically deleted after 3 days.
 
 ```tsx
 const BASE_URL = 'https://api.gauthamvijay.com';
