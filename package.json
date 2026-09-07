@@ -45,8 +45,10 @@
   },
   "keywords": [
     "react-native",
-    "ios",
-    "android"
+    "aws-s3",
+    "cloudflare-r2",
+    "s3-compatible",
+    "nitromodule"
   ],
   "repository": {
     "type": "git",
